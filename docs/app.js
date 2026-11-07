@@ -427,6 +427,48 @@
     document.title = (t && navKey !== "#/" ? t.textContent + " · " : "") + "RHCSA Study Kit";
     if (page !== "search") window.scrollTo(0, 0);
     const a = sidebar.querySelector(".active"); if (a) a.scrollIntoView({ block: "nearest" });
+    buildRail(["lecture", "guide", "lab"].includes(page) && arg ? page : null);
+  }
+
+  /* ---------- right rail (wide screens): "on this page" with scroll-spy ---------- */
+  const rail = document.getElementById("rail");
+  let spy = null;
+  function buildRail(kind) {
+    if (spy) { spy.disconnect(); spy = null; }
+    rail.innerHTML = "";
+    let heads = [...app.querySelectorAll(".md h2")];
+    if (heads.length < 3) heads = [...app.querySelectorAll(".md h2, .md h3")];
+    heads = heads.filter((h) => !h.closest("details:not(.toc)"));
+    const on = !!kind && heads.length >= 2;
+    document.querySelector(".layout").classList.toggle("has-rail", on);
+    if (!on) return;
+    const used = {};
+    heads.forEach((h) => { if (!h.id) { let id = "h-" + slugId(h.textContent); used[id] = (used[id] || 0) + 1; if (used[id] > 1) id += "-" + used[id]; h.id = id; } });
+    const box = el(`<div class="rail-box"><div class="rail-label">On this page</div><nav class="rail-toc"></nav></div>`);
+    const nav = box.querySelector("nav");
+    const links = new Map();
+    for (const h of heads) {
+      const a = el(`<a href="#" class="${h.tagName === "H3" ? "sub" : ""}">${esc(h.textContent)}</a>`);
+      a.onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: "smooth" }); };
+      nav.appendChild(a); links.set(h, a);
+    }
+    const top = el(`<a href="#" class="rail-top">↑ Back to top</a>`);
+    top.onclick = (e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    box.appendChild(top);
+    rail.appendChild(box);
+    let current = null;
+    const visible = new Set();
+    spy = new IntersectionObserver((entries) => {
+      entries.forEach((en) => (en.isIntersecting ? visible.add(en.target) : visible.delete(en.target)));
+      let pick = heads.find((h) => visible.has(h));
+      if (!pick) pick = [...heads].reverse().find((h) => h.getBoundingClientRect().top < 120) || heads[0];
+      if (pick !== current) {
+        if (current) links.get(current).classList.remove("on");
+        current = pick; const a = links.get(pick); a.classList.add("on");
+        a.scrollIntoView({ block: "nearest" });
+      }
+    }, { rootMargin: "-64px 0px -60% 0px" });
+    heads.forEach((h) => spy.observe(h));
   }
   window.addEventListener("hashchange", route);
   route();
