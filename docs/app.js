@@ -9,8 +9,9 @@
 
   /* ---------- storage (per-browser progress) ---------- */
   const STORE_KEY = "rhcsa-kit-v1";
-  let state = { obj: {}, labs: {}, best: {}, checks: {}, theme: null };
+  let state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, theme: null };
   try { Object.assign(state, JSON.parse(localStorage.getItem(STORE_KEY) || "{}")); } catch (e) {}
+  state.read = state.read || {};
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
 
   /* ---------- helpers ---------- */
@@ -18,6 +19,10 @@
   const labById = (id) => KIT.labs.find((l) => l.id === id);
   const sections = KIT.guide.sections;
   const numbered = sections.filter((s) => s.num);
+  const lectures = KIT.lectures || [];
+  const lectureByNum = (n) => lectures.find((l) => l.num === n);
+  const readMins = (l) => Math.max(1, Math.round(l.words / 200));
+  const slugId = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const allObjectives = KIT.objectives.groups.flatMap((g) => g.items);
   const objDone = (items) => items.filter((o) => state.obj[o.id]).length;
   const labsDone = () => KIT.labs.filter((l) => state.labs[l.id] === "done").length;
@@ -49,6 +54,7 @@
       const m = t.match(/^labs\/(\d\d)-[\w-]+\/?(\w+\.md)?$/);
       if (m && labById(m[1])) href = "#/lab/" + m[1];
       else if (t === "STUDY-GUIDE.md") href = "#/guide";
+      else if (/^lectures\/(\d\d)-[\w-]+\.md$/.test(t) && lectureByNum(String(+t.slice(9, 11)))) href = "#/lecture/" + (+t.slice(9, 11));
       else if (t === "OBJECTIVES.md") href = "#/objectives";
       else if (t === "README.md") href = "#/setup";
       if (href) { const a = document.createElement("a"); a.href = href; c.replaceWith(a); a.appendChild(c); }
@@ -81,7 +87,13 @@
       <a class="nav-link${active("#/objectives")}" href="#/objectives"><span class="nav-text">Objectives checklist</span><span class="nav-num">${done}/${allObjectives.length}</span></a>
       <div class="mini-bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div>
     </div>
-    <div class="nav-group"><div class="nav-label">Study guide</div>`;
+    `;
+    if (lectures.length) {
+      h += `<div class="nav-group"><div class="nav-label"><span>Lectures</span><span>${lectures.filter((l) => state.read[l.num]).length}/${lectures.length}</span></div>`;
+      for (const l of lectures) h += `<a class="nav-link${active("#/lecture/" + l.num)}" href="#/lecture/${l.num}"><span class="nav-num">${l.num}</span><span class="nav-text">${esc(l.title)}</span>${state.read[l.num] ? '<span class="dot done"></span>' : ""}</a>`;
+      h += `</div>`;
+    }
+    h += `<div class="nav-group"><div class="nav-label">Study guide (quick reference)</div>`;
     for (const s of sections) {
       h += `<a class="nav-link${active("#/guide/" + s.slug)}" href="#/guide/${s.slug}"><span class="nav-num">${s.num ? s.num : "•"}</span><span class="nav-text">${esc(s.title)}</span></a>`;
     }
@@ -109,13 +121,13 @@
       rows += `<div class="card section-row">
         <div class="n">${s.num}</div>
         <div><a class="t" href="#/guide/${s.slug}">${esc(s.title)}</a><div class="s">${od}/${ot} objectives checked off</div></div>
-        <div class="links">${s.labs.map((id) => { const st = state.labs[id]; return `<a class="pill" href="#/lab/${id}">${st === "done" ? "✓ " : ""}Lab ${id}</a>`; }).join("")}</div>
+        <div class="links">${lectureByNum(s.num) ? `<a class="pill" href="#/lecture/${s.num}">${state.read[s.num] ? "✓ " : ""}Lecture</a>` : ""}${s.labs.map((id) => { const st = state.labs[id]; return `<a class="pill" href="#/lab/${id}">${st === "done" ? "✓ " : ""}Lab ${id}</a>`; }).join("")}</div>
       </div>`;
     }
     app.innerHTML = `
       <div class="eyebrow">EX200 · RHEL 10</div>
       <h1>${esc(KIT.guide.title)}</h1>
-      <p class="lede">The 62 official objectives, a study guide with the commands and traps for each, and 11 hands-on labs with broken scenarios,
+      <p class="lede">The 62 official objectives, long-form lectures that explain how each part of the system works, a quick-reference study guide with the commands and traps, and 11 hands-on labs with broken scenarios,
       an automatic grader and worked solutions. Your progress is saved in this browser.</p>
       <div class="grid cols-3">
         <a class="card" href="#/objectives" style="color:inherit;text-decoration:none"><div class="stat-num">${done}<span class="stat-label"> / ${allObjectives.length}</span></div><div class="stat-label">objectives checked off</div><div class="bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div></a>
@@ -123,7 +135,7 @@
         <a class="card" href="#/guide/${finalSec ? finalSec.slug : ""}" style="color:inherit;text-decoration:none"><div class="stat-num">${finalDone}<span class="stat-label"> / ${finalItems}</span></div><div class="stat-label">final-week drills done</div><div class="bar"><i style="width:${pct(finalDone, finalItems)}%"></i></div></a>
       </div>
       <div class="btn-row">
-        <a class="btn primary" href="#/guide/${sections[0].slug}">Start reading</a>
+        <a class="btn primary" href="${lectures.length ? "#/lecture/" + lectures[0].num : "#/guide/" + sections[0].slug}">Start reading</a>
         <a class="btn" href="#/setup">Set up the labs</a>
         <a class="btn" href="${REPO_URL}/archive/refs/heads/main.zip">Download the kit (.zip)</a>
       </div>
@@ -133,7 +145,7 @@
     const how = KIT.readme.split(/^## /m).find((p) => /^Suggested study plan/.test(p));
     if (how) app.appendChild(md(how.replace(/^.*\n/, "")));
     app.appendChild(el(`<div class="footer">Progress lives in this browser only. <a href="#" id="resetAll">Reset all progress</a></div>`));
-    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses and best times?")) { state = { obj: {}, labs: {}, best: {}, checks: {}, theme: state.theme }; save(); route(); } };
+    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses and best times?")) { state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, theme: state.theme }; save(); route(); } };
   }
 
   function pageSetup() {
@@ -157,6 +169,8 @@
     if (i < 0) return pageGuideIndex();
     const s = sections[i];
     app.innerHTML = `<div class="eyebrow">Study guide${s.num ? " · Section " + s.num : ""}</div><h1>${esc(s.title)}</h1>`;
+    const lec = s.num && lectureByNum(s.num);
+    if (lec) app.appendChild(el(`<div class="callout">This page is the quick reference. For the full explanation of how it all works, read <a href="#/lecture/${lec.num}">Lecture ${lec.num}: ${esc(lec.title)}</a> (about ${readMins(lec)} min).</div>`));
     if (s.labs.length) {
       app.appendChild(el(`<div class="btn-row">${s.labs.map((id) => { const l = labById(id); return `<a class="btn" href="#/lab/${id}">Practice: Lab ${id} · ${esc(shortTitle(l.title))} <span class="badge ${l.runtime}">${l.runtime === "vm" ? "VM" : "container"}</span></a>`; }).join("")}</div>`));
     }
@@ -169,6 +183,50 @@
       app.appendChild(objList(g));
     }
     app.appendChild(pager(i > 0 && sections[i - 1], sections[i + 1], (x) => "#/guide/" + x.slug, (x) => (x.num ? x.num + ". " : "") + x.title));
+  }
+
+  function pageLectureIndex() {
+    app.innerHTML = `<div class="eyebrow">Lectures</div><h1>Lectures</h1>
+      <p class="lede">Long-form reading, one lecture per exam section, organised by the official objective numbers. Each one explains what is going on underneath the commands, so you can reason your way through a task you have never seen. Read a lecture, skim the quick reference, then do the lab.</p>`;
+    const list = el(`<div class="section-list"></div>`);
+    for (const l of lectures) list.appendChild(el(`<a class="card section-row" href="#/lecture/${l.num}" style="color:inherit;text-decoration:none"><div class="n">${l.num}</div><div><div class="t">${esc(l.title)}</div><div class="s">about ${readMins(l)} min · ${l.words.toLocaleString()} words</div></div><div>${state.read[l.num] ? '<span class="badge done">✓ read</span>' : ""}</div></a>`));
+    app.appendChild(list);
+  }
+
+  function pageLecture(num) {
+    const i = lectures.findIndex((l) => l.num === num);
+    if (i < 0) return pageLectureIndex();
+    const l = lectures[i];
+    const sec = numbered.find((s) => s.num === l.num);
+    app.innerHTML = `<div class="eyebrow">Lecture ${l.num} · about ${readMins(l)} min read</div><h1>${esc(l.title)}</h1>`;
+    const btns = [];
+    if (sec) btns.push(`<a class="btn" href="#/guide/${sec.slug}">Quick reference</a>`);
+    if (sec) for (const id of sec.labs) { const lb = labById(id); btns.push(`<a class="btn" href="#/lab/${id}">Practice: Lab ${id} · ${esc(shortTitle(lb.title))} <span class="badge ${lb.runtime}">${lb.runtime === "vm" ? "VM" : "container"}</span></a>`); }
+    if (btns.length) app.appendChild(el(`<div class="btn-row">${btns.join("")}</div>`));
+    const body = md(l.body, { checkKey: "lecture:" + l.num });
+    const heads = [...body.querySelectorAll("h2")];
+    const used = {};
+    body.querySelectorAll("h2, h3").forEach((h) => { let id = "lec-" + slugId(h.textContent); used[id] = (used[id] || 0) + 1; if (used[id] > 1) id += "-" + used[id]; h.id = id; });
+    if (heads.length > 2) {
+      const toc = el(`<details class="spoiler toc" open><summary>Contents</summary><div class="inner"><ol></ol></div></details>`);
+      for (const h of heads) {
+        const a = el(`<li><a href="#">${esc(h.textContent)}</a></li>`);
+        a.querySelector("a").onclick = (e) => { e.preventDefault(); h.scrollIntoView({ behavior: "smooth" }); };
+        toc.querySelector("ol").appendChild(a);
+      }
+      app.appendChild(toc);
+    }
+    app.appendChild(body);
+    const g = KIT.objectives.groups.find((x) => x.num === l.num);
+    if (g) {
+      app.appendChild(el(`<h2>Check yourself</h2>`));
+      app.appendChild(el(`<p class="lede" style="margin-bottom:12px">Tick an objective when you can do it from memory, without the guide.</p>`));
+      app.appendChild(objList(g));
+    }
+    const mark = el(`<div class="btn-row"><button class="btn${state.read[l.num] ? "" : " primary"}" id="markRead">${state.read[l.num] ? "✓ Read (click to undo)" : "Mark lecture as read"}</button></div>`);
+    mark.querySelector("button").onclick = () => { if (state.read[l.num]) delete state.read[l.num]; else state.read[l.num] = true; save(); pageLecture(num); renderSidebar(location.hash); };
+    app.appendChild(mark);
+    app.appendChild(pager(i > 0 && lectures[i - 1], lectures[i + 1], (x) => "#/lecture/" + x.num, (x) => "Lecture " + x.num + " · " + x.title));
   }
 
   function objList(g) {
@@ -296,6 +354,7 @@
   const index = [];
   (function buildIndex() {
     const add = (where, title, href, text) => text.split(/\n/).forEach((line) => { if (line.trim()) index.push({ where, title, href, line }); });
+    for (const l of lectures) add("Lecture " + l.num, l.title, "#/lecture/" + l.num, l.body);
     for (const s of sections) add("Study guide", s.title, "#/guide/" + s.slug, s.body);
     for (const o of allObjectives) index.push({ where: "Objective " + o.id, title: o.text, href: "#/objectives", line: o.text + " (lab " + o.labs + ")" });
     for (const l of KIT.labs) { add("Lab " + l.id + " tasks", l.title, "#/lab/" + l.id, l.tasks); add("Lab " + l.id + " solution", l.title, "#/lab/" + l.id, l.solution); }
@@ -354,6 +413,8 @@
     document.body.classList.remove("nav-open");
     let navKey = h;
     if (page === "search") { const q = decodeURIComponent(arg); if (searchBox.value.trim() !== q) searchBox.value = q; pageSearch(q); }
+    else if (page === "lecture" && arg) pageLecture(arg);
+    else if (page === "lecture" || page === "lectures") pageLectureIndex();
     else if (page === "guide" && arg) pageGuide(arg);
     else if (page === "guide") pageGuideIndex();
     else if (page === "objectives") pageObjectives();

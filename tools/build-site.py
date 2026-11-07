@@ -111,18 +111,40 @@ def labs():
     return out
 
 
+def lectures():
+    """lectures/NN-name.md: long-form reading, one per exam section (NN = section number)."""
+    out = []
+    d = ROOT / "lectures"
+    if not d.exists():
+        return out
+    for f in sorted(d.glob("[0-9][0-9]-*.md")):
+        text = read(f)
+        first, _, body = text.partition("\n")
+        title = re.sub(r"^#\s*(Lecture\s+\d+:\s*)?", "", first).strip()
+        out.append({
+            "num": str(int(f.name[:2])),
+            "slug": f.stem,
+            "title": title,
+            "body": body.strip(),
+            "words": len(re.sub(r"```.*?```", "", body, flags=re.S).split()),
+        })
+    return out
+
+
 def main():
     data = {
         "readme": read(ROOT / "README.md"),
         "guide": guide(),
         "objectives": objectives(),
         "labs": labs(),
+        "lectures": lectures(),
     }
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text("window.KIT = " + json.dumps(data, ensure_ascii=False, indent=1) + ";\n", encoding="utf-8")
     n = sum(len(g["items"]) for g in data["objectives"]["groups"])
     print(f"wrote {OUT.relative_to(ROOT)}: {len(data['guide']['sections'])} guide sections, "
-          f"{n} objectives, {len(data['labs'])} labs")
+          f"{n} objectives, {len(data['labs'])} labs, {len(data['lectures'])} lectures "
+          f"({sum(l['words'] for l in data['lectures'])} words)")
 
 
 if __name__ == "__main__":

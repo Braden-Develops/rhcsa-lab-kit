@@ -4,7 +4,9 @@ A study guide plus 11 hands-on labs covering every objective of the current RHCS
 working part to build, **broken scenarios to diagnose and fix**, an automatic **grader**, and a worked **solution**.
 
 - `OBJECTIVES.md`: the 62 official objective lines (verbatim, from Red Hat's EX200 page) mapped to guide rows and lab tasks
-- `STUDY-GUIDE.md`: every exam objective, the commands that matter, gotchas, and which lab drills it
+- `lectures/NN-*.md`: long-form lectures, one per exam section, explaining how each part of the system works
+  (concepts, internals and the reasons behind the commands), numbered by objective
+- `STUDY-GUIDE.md`: the quick reference: every exam objective, the commands that matter, gotchas, and which lab drills it
 - `labs/NN-name/`: `TASKS.md`, `setup.sh` (builds the scenario), `check.sh` (grader), `SOLUTION.md`,
   plus a `Dockerfile` for container labs
 - `lab`: the launcher you run on your machine
