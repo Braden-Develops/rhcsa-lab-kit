@@ -1,0 +1,55 @@
+# RHCSA lab VM: AlmaLinux 10 with 3 spare 5 GiB disks and a second NIC for the networking lab.
+#
+#   cd vm && vagrant up            # first time: downloads the box and provisions (~5-10 min)
+#   ../lab start 06                # restores the "clean" snapshot, then sets up lab 06
+#
+# Providers: libvirt (Linux, recommended) or VirtualBox (Windows/macOS-Intel/Linux).
+#   LAB_BOX=almalinux/10-x86_64_v2  for older CPUs without x86-64-v3 (pre-2013-ish)
+#   LAB_GUI=1                       show the VirtualBox console window (needed for lab 05)
+#   Apple Silicon: use the VMware Fusion or Parallels provider; both have arm64 AlmaLinux 10 boxes.
+BOX = ENV.fetch("LAB_BOX", "almalinux/10")
+DISK_GB = 5
+
+Vagrant.configure("2") do |config|
+  config.vm.box = BOX
+  config.vm.hostname = "servera.lab.example.com"
+  # Second NIC, deliberately left unconfigured: you configure it in lab 09.
+  config.vm.network "private_network", ip: "192.168.50.10", auto_config: false,
+    libvirt__network_name: "rhcsa-lab", libvirt__dhcp_enabled: false
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.provider :libvirt do |lv|
+    lv.memory = 2048
+    lv.cpus = 2
+    lv.graphics_type = "spice"         # open the console with virt-manager
+    lv.video_type = "virtio"
+    3.times { lv.storage :file, size: "#{DISK_GB}G", bus: "virtio" }
+  end
+
+  config.vm.provider :virtualbox do |vb, override|
+    vb.memory = 2048
+    vb.cpus = 2
+    vb.gui = ENV["LAB_GUI"] == "1"
+    (1..3).each { |i| override.vm.disk :disk, name: "lab-disk#{i}", size: "#{DISK_GB}GB" }
+  end
+
+  config.vm.provider :vmware_desktop do |vm, override|
+    vm.vmx["memsize"] = "2048"
+    vm.vmx["numvcpus"] = "2"
+    vm.gui = ENV["LAB_GUI"] == "1"
+    (1..3).each { |i| override.vm.disk :disk, name: "lab-disk#{i}", size: "#{DISK_GB}GB" }
+  end
+
+  # Heavy one-time setup (packages, accounts, GRUB menu)
+  config.vm.provision "packages", type: "shell", path: "provision.sh"
+  # Copy the lab kit in. ./lab re-runs these two on every `./lab start` so the VM always has your latest kit.
+  config.vm.provision "kit", type: "file", source: "..", destination: "/tmp/labkit-upload"
+  config.vm.provision "install", type: "shell", inline: <<-SHELL
+    rm -rf /opt/labkit && mkdir -p /opt/labkit
+    cp -r /tmp/labkit-upload/bin /tmp/labkit-upload/lib /tmp/labkit-upload/labs /opt/labkit/
+    rm -rf /tmp/labkit-upload
+    chmod +x /opt/labkit/bin/*
+    ln -sf /opt/labkit/bin/labctl /usr/local/bin/labctl
+    mkdir -p /etc/labkit /var/lib/labkit
+  SHELL
+end

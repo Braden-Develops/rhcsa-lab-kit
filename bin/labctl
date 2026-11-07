@@ -1,0 +1,59 @@
+#!/bin/bash
+# labctl: in-guest helper. Works the same inside a lab container or the lab VM.
+#   labctl list                 list labs available on this machine
+#   labctl setup <lab>          build the scenario (destructive; VM labs: start from a clean snapshot)
+#   labctl tasks <lab>          print the tasks
+#   labctl check <lab>          grade your work
+#   labctl hint <lab>           show the solution walkthrough (try first!)
+LABKIT=${LABKIT:-/opt/labkit}
+LABS=${LABS:-$LABKIT/labs}
+
+die() { echo "labctl: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "run as root (sudo labctl ...)"; }
+resolve() {
+  local id=$1
+  [ -z "$id" ] && [ -f /etc/labkit/lab-id ] && id=$(cat /etc/labkit/lab-id)
+  [ -n "$id" ] || die "which lab? (labctl list)"
+  local d; d=$(ls -d "$LABS/$id"* 2>/dev/null | head -1)
+  [ -n "$d" ] && [ -d "$d" ] || die "no such lab: $id"
+  echo "$d"
+}
+
+# Replace {{DISK1}}, {{IFACE}}, ... with this machine's values (VM labs)
+subst() {
+  if [ -r /etc/labkit/vars.env ]; then
+    local args=() k v
+    while IFS='=' read -r k v; do [ -n "$k" ] && args+=(-e "s|{{$k}}|$v|g"); done < /etc/labkit/vars.env
+    sed "${args[@]}"
+  else cat; fi
+}
+
+cmd=$1; shift || true
+case "$cmd" in
+  list)
+    for d in "$LABS"/*/; do
+      . "$d/lab.conf"; printf '%-24s %-10s %s\n' "$(basename "$d")" "$RUNTIME" "$TITLE"
+    done ;;
+  setup|setup-auto)
+    need_root
+    d=$(resolve "$1"); id=$(basename "$d")
+    mkdir -p /var/lib/labkit /etc/labkit
+    echo "$id" > /etc/labkit/lab-id
+    echo ">>> Setting up lab $id ..."
+    LABDIR=$d bash "$d/setup.sh" 2>&1 | tee /var/lib/labkit/setup.log
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -eq 0 ] || die "setup failed (see /var/lib/labkit/setup.log)"
+    touch /var/lib/labkit/setup-done
+    echo ">>> Lab $id ready. Read the tasks with: labctl tasks" ;;
+  tasks)
+    d=$(resolve "$1"); subst < "$d/TASKS.md" ;;
+  check|grade)
+    need_root
+    d=$(resolve "$1")
+    LABDIR=$d bash "$d/check.sh" ;;
+  hint|solution)
+    d=$(resolve "$1"); subst < "$d/SOLUTION.md" ;;
+  ""|-h|--help|help)
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command: $cmd" ;;
+esac

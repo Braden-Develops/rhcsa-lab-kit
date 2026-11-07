@@ -1,0 +1,13 @@
+[Unit]
+Description=RHCSA lab: prepare the scenario for this lab (runs once)
+After=multi-user.target
+ConditionPathExists=!/var/lib/labkit/setup-done
+ConditionPathExists=/etc/labkit/lab-id
+
+[Service]
+Type=oneshot
+ExecStart=/opt/labkit/bin/labctl setup-auto
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

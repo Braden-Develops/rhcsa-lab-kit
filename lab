@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# RHCSA lab kit - host-side launcher.
+#
+#   ./lab list                 show all labs and whether they run in a container or the VM
+#   ./lab start <lab>          build + boot a fresh lab (container) or prepare it in the VM
+#   ./lab shell <lab>          root shell inside the lab
+#   ./lab check <lab>          grade your work
+#   ./lab tasks <lab>          print the tasks
+#   ./lab solution <lab>       print the worked solution
+#   ./lab reset <lab>          throw the lab away and start over
+#   ./lab stop <lab>           remove the lab container
+#   ./lab stop-all             remove every lab container
+#
+# <lab> can be a prefix, e.g. "01" or "05-storage".
+# Container labs use podman if installed, otherwise docker (override: ENGINE=docker ./lab ...).
+# VM labs use the Vagrant VM in ./vm (see README.md).
+set -euo pipefail
+cd "$(dirname "$0")"
+KIT=$PWD
+
+die() { echo "lab: $*" >&2; exit 1; }
+
+ENGINE=${ENGINE:-$(command -v podman >/dev/null && echo podman || echo docker)}
+BASE_TAG=rhcsa-base:10
+[ "$ENGINE" = podman ] && BASE_REF=localhost/$BASE_TAG || BASE_REF=$BASE_TAG
+
+resolve() {
+  [ -n "${1:-}" ] || die "which lab? try: ./lab list"
+  local d; d=$(ls -d labs/"$1"* 2>/dev/null | head -1 || true)
+  [ -n "$d" ] || die "no lab matching '$1'"
+  LAB=$(basename "$d"); LABDIR=$KIT/labs/$LAB
+  RUNTIME=container; TITLE=""
+  # shellcheck disable=SC1090
+  . "$LABDIR/lab.conf"
+  CNAME=rhcsa-$LAB
+}
+
+run_args() {
+  # systemd as PID 1 needs a little help under Docker; podman handles it natively.
+  local a=(-d --name "$CNAME" --hostname "${HOSTNAME_FQDN:-servera.lab.example.com}")
+  if [ "$ENGINE" = podman ]; then
+    a+=(--systemd=always)
+    [ "${PRIVILEGED:-no}" = yes ] && a+=(--privileged)
+  else
+    a+=(--privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock)
+  fi
+  printf '%s\n' "${a[@]}"
+}
+
+build_base() {
+  if ! $ENGINE image inspect "$BASE_REF" >/dev/null 2>&1 || [ "${REBUILD:-}" = 1 ]; then
+    echo ">>> Building base image $BASE_TAG (first time takes a few minutes)"
+    $ENGINE build -t "$BASE_TAG" -f images/base/Dockerfile .
+  fi
+}
+
+vm() { (cd vm && "$@"); }
+vm_labctl() { vm vagrant ssh -c "sudo labctl $*"; }
+
+wait_ready() {
+  echo -n ">>> Waiting for the lab to boot and finish setup"
+  for _ in $(seq 1 90); do
+    if $ENGINE exec "$CNAME" test -f /var/lib/labkit/setup-done 2>/dev/null; then echo " done."; return 0; fi
+    if $ENGINE exec "$CNAME" systemctl is-failed -q labkit-setup.service 2>/dev/null; then
+      echo; $ENGINE exec "$CNAME" journalctl -u labkit-setup.service --no-pager | tail -30
+      die "lab setup failed (output above)"
+    fi
+    echo -n .; sleep 2
+  done
+  echo; die "timed out; inspect with: $ENGINE exec -it $CNAME journalctl -u labkit-setup"
+}
+
+cmd=${1:-help}; shift || true
+case "$cmd" in
+  list)
+    printf '%-26s %-10s %s\n' LAB RUNTIME TITLE
+    for d in labs/*/; do (RUNTIME=container; . "$d/lab.conf"; printf '%-26s %-10s %s\n' "$(basename "$d")" "$RUNTIME" "$TITLE"); done ;;
+  start|reset)
+    resolve "${1:-}"
+    if [ "$RUNTIME" = vm ]; then
+      if ! vm vagrant snapshot list 2>/dev/null | grep -qw clean; then
+        echo ">>> Creating the lab VM and its clean snapshot (first time only)"
+        vm vagrant up
+        vm vagrant snapshot save clean
+      fi
+      vm vagrant up >/dev/null
+      echo ">>> Restoring the VM to its clean snapshot"
+      vm vagrant snapshot restore --no-provision clean
+      vm vagrant provision --provision-with kit,install >/dev/null
+      vm_labctl setup "$LAB"
+      echo; echo "Lab $LAB is ready.  Log in with:  ./lab shell $LAB   (or: cd vm && vagrant ssh)"
+      vm_labctl tasks "$LAB"
+    else
+      build_base
+      $ENGINE rm -f "$CNAME" >/dev/null 2>&1 || true
+      echo ">>> Building lab image for $LAB"
+      $ENGINE build -q -t "rhcsa-lab:$LAB" --build-arg BASE="$BASE_REF" -f "$LABDIR/Dockerfile" . >/dev/null
+      mapfile -t args < <(run_args)
+      $ENGINE run "${args[@]}" "rhcsa-lab:$LAB" >/dev/null
+      wait_ready
+      echo; $ENGINE exec "$CNAME" labctl tasks
+      echo; echo "Get a shell with:  ./lab shell $LAB      Grade with:  ./lab check $LAB"
+    fi ;;
+  shell)
+    resolve "${1:-}"
+    if [ "$RUNTIME" = vm ]; then vm vagrant ssh -- -t sudo -i
+    else $ENGINE exec -it -w /root "$CNAME" bash -l; fi ;;
+  check|tasks|solution)
+    resolve "${1:-}"
+    if [ "$RUNTIME" = vm ]; then vm_labctl "$cmd" "$LAB"
+    elif [ "$cmd" = check ]; then $ENGINE exec "$CNAME" labctl check
+    else cat "$LABDIR/$( [ "$cmd" = tasks ] && echo TASKS.md || echo SOLUTION.md )"; fi ;;
+  stop)
+    resolve "${1:-}"
+    [ "$RUNTIME" = vm ] && { vm vagrant halt; exit; }
+    $ENGINE rm -f "$CNAME" >/dev/null && echo "removed $CNAME" ;;
+  stop-all)
+    $ENGINE ps -a --format '{{.Names}}' | grep '^rhcsa-' | xargs -r $ENGINE rm -f ;;
+  *) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
