@@ -1,0 +1,18 @@
+# systemd *user* unit for labkit-agent. Install:
+#   mkdir -p ~/.config/systemd/user && cp agent/labkit-agent.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now labkit-agent
+#   sudo loginctl enable-linger "$USER"     # keep it running when you're logged out
+# Assumes the kit is cloned at ~/rhcsa-lab-kit; edit ExecStart if not.
+[Unit]
+Description=RHCSA lab kit agent (site <-> lab host bridge)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/rhcsa-lab-kit/agent/labkit-agent.py serve
+Restart=on-failure
+RestartSec=3
+# podman/vagrant need these on PATH
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
