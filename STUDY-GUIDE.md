@@ -12,6 +12,8 @@ containers* (Podman) was **removed**; Stratis and VDO are not in the objectives.
 (`/etc/NetworkManager/system-connections/`), no `ifcfg` files.
 
 Each section lists the official objectives, what you must be able to do, the commands, the traps, and the lab.
+This guide is the **quick reference**. For the full explanation of how each part works, read the matching
+lecture in `lectures/` (one per section, same objective numbers) first.
 
 ---
 
