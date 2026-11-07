@@ -263,6 +263,7 @@ class Notes:
                 return
             git(self.dir, "commit", "-q", "-m", "Notes " + time.strftime("%Y-%m-%d %H:%M"))
             if git(self.dir, "remote").stdout.strip():
+                git(self.dir, "pull", "-q", "--rebase", "--autostash")  # the site may also commit to this repo directly
                 r = git(self.dir, "push", "-q")
                 log("notes pushed" if r.returncode == 0 else "notes push failed: " + r.stderr.strip()[:200])
 

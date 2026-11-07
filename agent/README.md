@@ -57,16 +57,20 @@ tailscale serve  ──►  labkit-agent on 127.0.0.1:8737  ──►  ./lab sta
 
 ## Back up your notes
 
-Notes are Markdown files in `~/rhcsa-notes`, one per lecture, guide section or lab. The agent commits them about 20 seconds after you stop typing. If the repo has a remote, it pushes them too. To set up the remote, create an empty **private** repo, for example `rhcsa-notes`, then run:
+Notes are Markdown files, one per lecture, guide section or lab (`lecture-4.md`, `lab-06.md`, …).
+
+**Without a lab host:** on the site's **My notes** page, open **GitHub backup** and paste a fine-grained token that can only write to a private `rhcsa-notes` repo. The site then commits each note to that repo itself.
+
+**With the agent:** the agent keeps notes in `~/rhcsa-notes`. It commits about 20 seconds after you stop typing, then pulls with `--rebase` and pushes, so it can share one repo with the site's GitHub backup. If that repo already exists, clone it into place **before** running `init`. `init` leaves an existing repo alone:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/rhcsa-notes -N ''      # add the .pub as a deploy key with write access
+ssh-keygen -t ed25519 -f ~/.ssh/rhcsa-notes -N ''      # add the .pub to the repo as a deploy key with write access
+GIT_SSH_COMMAND="ssh -i ~/.ssh/rhcsa-notes" git clone git@github.com:<you>/rhcsa-notes.git ~/rhcsa-notes
 git -C ~/rhcsa-notes config core.sshCommand "ssh -i ~/.ssh/rhcsa-notes"
-git -C ~/rhcsa-notes remote add origin git@github.com:<you>/rhcsa-notes.git
-git -C ~/rhcsa-notes push -u origin main
+python3 agent/labkit-agent.py init
 ```
 
-The site also keeps a copy of every note in your browser, so notes still work when the lab host is off. They sync the next time the site connects.
+The site also keeps a copy of every note in your browser, so notes still work offline and sync the next time they can.
 
 ## API (for reference)
 

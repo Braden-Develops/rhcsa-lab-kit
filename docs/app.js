@@ -652,6 +652,7 @@
       status("Saving…");
       clearTimeout(pushTimers[key]);
       pushTimers[key] = setTimeout(() => pushNote(key, (m) => status(m || "Saved")), 1200);
+      ghSchedule(key, status);
     });
     ta.addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end"); ta.dispatchEvent(new Event("input")); } });
     tog.onclick = () => {
@@ -667,6 +668,10 @@
         else status(r.updated || n.text ? "Synced" : "");
       }).catch(() => status(n.text ? "Saved in this browser (lab host offline)" : ""));
     } else status(n.text ? "Saved in this browser" : "");
+    if (ghReady()) ghPullOne(key).then((r) => {
+      if (r === "pulled") { ta.value = state.notes[key].text; Object.assign(n, state.notes[key]); grow(); status("Loaded from GitHub"); }
+      else if (r === "pushed") status("Backed up to GitHub");
+    }).catch((e) => status("GitHub: " + e.message));
     return box;
   }
 
@@ -679,8 +684,10 @@
   };
   function pageNotes() {
     app.innerHTML = `<div class="eyebrow">Notes</div><h1>My notes</h1>
-      <p class="lede">Every lecture, study guide section and lab has a notes box. They are all collected here. Notes are saved in this browser${hostReady() ? " and committed to the git repo on your lab host" : "; connect a <a href=\"#/host\">lab host</a> to back them up to git"}.</p>
-      <div class="btn-row"><button class="btn" id="nDl">Download all (.md)</button>${hostReady() ? `<button class="btn" id="nSync">Sync now</button>` : ""}<span class="muted" id="nMsg"></span></div><div id="nList"></div>`;
+      <p class="lede">Every lecture, study guide section and lab has a notes box, and they are all collected here. Notes save in this browser as you type${ghReady() ? ", are committed to <a href=\"https://github.com/" + esc(ghCfg.repo) + "\">" + esc(ghCfg.repo) + "</a> on GitHub" : ""}${hostReady() ? " and are synced to your lab host" : ""}.</p>
+      <div class="btn-row"><button class="btn" id="nDl">Download all (.md)</button>${ghReady() || hostReady() ? `<button class="btn" id="nSync">Sync now</button>` : ""}<span class="muted" id="nMsg"></span></div>`;
+    app.appendChild(ghCard(() => pageNotes()));
+    app.appendChild(el(`<div id="nList"></div>`));
     const render = () => {
       const list = document.getElementById("nList"); if (!list) return;
       const items = Object.entries(state.notes).filter(([, n]) => n.text.trim()).map(([k, n]) => ({ k, n, ...noteSource(k) })).sort((a, b) => a.order.localeCompare(b.order));
@@ -699,12 +706,121 @@
     const syncBtn = document.getElementById("nSync");
     const doSync = async () => {
       const msg = document.getElementById("nMsg"); if (msg) msg.textContent = "Syncing…";
-      const c = await syncAllNotes();
-      try { await api("notes/sync", { method: "POST" }); } catch (e) {}
-      if (document.getElementById("nMsg")) { document.getElementById("nMsg").textContent = c ? `${c} note(s) synced, committing to git` : "Up to date"; items = render(); }
+      let c = 0, err = "";
+      if (ghReady()) { try { c += await ghSyncAll(); } catch (e) { err = "GitHub: " + e.message; } }
+      if (hostReady()) { c += await syncAllNotes(); try { await api("notes/sync", { method: "POST" }); } catch (e) {} }
+      if (document.getElementById("nMsg")) { document.getElementById("nMsg").textContent = err || (c ? `${c} note(s) synced` : "Everything is backed up"); items = render(); }
     };
     if (syncBtn) { syncBtn.onclick = doSync; doSync(); }
   }
+
+
+  /* ---------- notes backup straight to a private GitHub repo (works without a lab host) ---------- */
+  const GH_KEY = "rhcsa-ghnotes-v1";
+  let ghCfg = { repo: "Braden-Develops/rhcsa-notes", token: "" };
+  try { Object.assign(ghCfg, JSON.parse(localStorage.getItem(GH_KEY) || "{}")); } catch (e) {}
+  const ghReady = () => !!(ghCfg.repo && ghCfg.token);
+  const ghSave = () => { try { localStorage.setItem(GH_KEY, JSON.stringify(ghCfg)); } catch (e) {} };
+  async function gh(path, opts = {}) {
+    const r = await fetch(`https://api.github.com/repos/${ghCfg.repo}${path}`, { ...opts, cache: "no-store",
+      headers: { Authorization: "Bearer " + ghCfg.token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(r.status === 401 ? "token rejected (expired or wrong?)" : r.status === 404 ? "repo not found, or the token can't see it" : j.message || "HTTP " + r.status); e.status = r.status; e.body = j; throw e; }
+    return j;
+  }
+  const b64enc = (str) => { const b = new TextEncoder().encode(str); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+  const b64dec = (c) => new TextDecoder().decode(Uint8Array.from(atob(c.replace(/\s/g, "")), (x) => x.charCodeAt(0)));
+  const ghPending = (n) => (n.updated || 0) > (n.ghAt || 0);
+
+  async function ghPush(key) {
+    const n = state.notes[key]; if (!n) return;
+    const at = n.updated;
+    const body = (sha) => JSON.stringify({ message: "Notes: " + noteSource(key).title, content: b64enc(n.text), ...(sha ? { sha } : {}) });
+    let r;
+    try { r = await gh(`/contents/${key}.md`, { method: "PUT", body: body(n.ghSha) }); }
+    catch (e) {
+      if (e.status !== 409 && e.status !== 422) throw e;
+      // our sha is stale (edited on another device): this browser's newer text wins, on top of the latest version
+      let sha; try { sha = (await gh(`/contents/${key}.md`)).sha; } catch (x) { if (x.status !== 404) throw x; }
+      r = await gh(`/contents/${key}.md`, { method: "PUT", body: body(sha) });
+    }
+    n.ghSha = r.content.sha; n.ghAt = at; save();
+  }
+  const ghTimers = {};
+  function ghSchedule(key, status) {
+    if (!ghReady()) return;
+    clearTimeout(ghTimers[key]);
+    ghTimers[key] = setTimeout(() => { delete ghTimers[key]; ghPush(key).then(() => status && status("Backed up to GitHub")).catch((e) => status && status("GitHub backup failed: " + e.message)); }, 15000);
+  }
+  // Flush pending GitHub pushes when the tab is hidden or closed.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") return;
+    for (const k of Object.keys(ghTimers)) { clearTimeout(ghTimers[k]); delete ghTimers[k]; ghPush(k).catch(() => {}); }
+  });
+
+  // One note: pull it if GitHub has a version this browser hasn't seen and we have no unsynced edits; push if we do.
+  async function ghPullOne(key) {
+    const n = state.notes[key];
+    let f = null;
+    try { f = await gh(`/contents/${key}.md`); } catch (e) { if (e.status !== 404) throw e; }
+    if (f && (!n || (f.sha !== n.ghSha && !ghPending(n)))) {
+      state.notes[key] = Object.assign(n || {}, { text: b64dec(f.content), updated: Date.now(), ghSha: f.sha }); state.notes[key].ghAt = state.notes[key].updated; save();
+      return "pulled";
+    }
+    if (n && n.text && (ghPending(n) || !f)) { await ghPush(key); return "pushed"; }
+    return "same";
+  }
+  async function ghSyncAll() {
+    let list = [];
+    try { list = await gh("/contents/"); } catch (e) { if (!(e.status === 404 && /empty/i.test((e.body && e.body.message) || ""))) throw e; }
+    let c = 0;
+    const remote = new Map(list.filter((f) => f.type === "file" && /^[a-z0-9][a-z0-9-]{0,63}\.md$/.test(f.name) && f.name !== "README.md").map((f) => [f.name.slice(0, -3), f.sha]));
+    for (const [k, sha] of remote) {
+      const n = state.notes[k];
+      if (!n || (sha !== n.ghSha && !ghPending(n))) { const f = await gh(`/contents/${k}.md`); state.notes[k] = Object.assign(n || {}, { text: b64dec(f.content), updated: Date.now(), ghSha: f.sha }); state.notes[k].ghAt = state.notes[k].updated; c++; }
+    }
+    for (const [k, n] of Object.entries(state.notes)) if (n.text && (ghPending(n) || !remote.has(k))) { await ghPush(k); c++; }
+    save();
+    return c;
+  }
+
+  function ghCard(onChange) {
+    const box = el(`<details class="spoiler gh-card"${ghReady() ? "" : " open"}><summary>GitHub backup <span class="hint">${ghReady() ? "on: " + esc(ghCfg.repo) : "off: notes are only in this browser"}</span></summary><div class="inner">
+      <p>The site commits each note to a <b>private</b> repo, about 15 seconds after you stop typing (and when you leave the page). It uses a fine-grained token that can only read and write that one repo. Your notes follow you to any browser where you paste the token.</p>
+      <ol>
+        <li>Create an empty private repo, for example <code>rhcsa-notes</code>.</li>
+        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a>: Repository access → <b>Only select repositories</b> → that repo; Permissions → <b>Contents: Read and write</b>. Nothing else.</li>
+        <li>Paste it below.</li>
+      </ol>
+      <div class="host-form" style="box-shadow:none;border:0;padding:0">
+        <label><span>Repo (owner/name)</span><input id="gRepo" spellcheck="false"></label>
+        <label><span>Token</span><input id="gTok" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_…"></label>
+        <div class="btn-row"><button class="btn primary" id="gSave">Save and sync</button>${ghReady() ? `<button class="btn" id="gOff">Turn off on this browser</button>` : ""}</div>
+        <div id="gOut"></div>
+      </div>
+      <p class="muted">The token is kept in this browser's local storage. Every site under braden-develops.github.io shares that storage, which is fine as long as they are all yours; the token can't touch anything except the notes repo.</p>
+    </div></details>`);
+    const repo = box.querySelector("#gRepo"), tok = box.querySelector("#gTok"), out = box.querySelector("#gOut");
+    repo.value = ghCfg.repo; tok.value = ghCfg.token;
+    box.querySelector("#gSave").onclick = async () => {
+      ghCfg.repo = repo.value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$|\/+$/g, ""); ghCfg.token = tok.value.trim();
+      out.innerHTML = `<p class="callout">Checking…</p>`;
+      try {
+        const info = await gh("");
+        if (!info.private) { out.innerHTML = `<p class="callout bad">${esc(ghCfg.repo)} is <b>public</b>. Make it private (Settings → Danger zone) before putting notes in it.</p>`; return; }
+        if (info.permissions && !info.permissions.push) { out.innerHTML = `<p class="callout bad">The token can read the repo but not write to it. Give it Contents: Read and write.</p>`; return; }
+        ghSave();
+        out.innerHTML = `<p class="callout">Connected. Syncing…</p>`;
+        const c = await ghSyncAll();
+        out.innerHTML = `<p class="callout ok">✓ Backing up to ${esc(ghCfg.repo)}. ${c} note(s) synced.</p>`;
+        setTimeout(onChange, 1200);
+      } catch (e) { out.innerHTML = `<p class="callout bad">✗ ${esc(e.message)}</p>`; }
+    };
+    const off = box.querySelector("#gOff");
+    if (off) off.onclick = () => { ghCfg.token = ""; ghSave(); onChange(); };
+    return box;
+  }
+  if (ghReady()) ghSyncAll().catch(() => {});
 
   // Connect in the background on load, so the sidebar dot and notes are current.
   if (hostReady()) refreshStatus().then((s) => { if (s && !s.error) syncAllNotes(); });
