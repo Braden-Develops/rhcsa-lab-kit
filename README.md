@@ -78,6 +78,11 @@ then `vagrant ssh -c "sudo labctl setup 06"`.
 Copy `bin/ lib/ labs/` to `/opt/labkit`, run `sudo bash vm/provision.sh`, link `/opt/labkit/bin/labctl` into
 `/usr/local/bin`, snapshot it, then `sudo labctl setup 06`. A free Red Hat Developer subscription gets you real RHEL.
 
+
+## Run the labs from the browser (optional)
+
+`agent/labkit-agent.py` is a small service for the machine that hosts your labs. It lets the study site start, grade and reset labs, open a root shell in the browser, and back your notes up to a git repo. It is reachable only over your Tailscale network and needs a token. Setup steps and the security model are in [`agent/README.md`](agent/README.md), and on the site's **Lab host** page.
+
 ## Suggested study plan (about 3 to 4 weeks at an hour a day)
 
 1. Read a section of `STUDY-GUIDE.md`, then do its lab **without** the solution. Grade it.

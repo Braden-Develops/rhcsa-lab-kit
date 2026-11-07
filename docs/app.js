@@ -9,9 +9,9 @@
 
   /* ---------- storage (per-browser progress) ---------- */
   const STORE_KEY = "rhcsa-kit-v1";
-  let state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, theme: null };
+  let state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, notes: {}, history: {}, theme: null };
   try { Object.assign(state, JSON.parse(localStorage.getItem(STORE_KEY) || "{}")); } catch (e) {}
-  state.read = state.read || {};
+  state.read = state.read || {}; state.notes = state.notes || {}; state.history = state.history || {};
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
 
   /* ---------- helpers ---------- */
@@ -86,6 +86,8 @@
       <a class="nav-link${active("#/setup")}" href="#/setup">Set up the labs</a>
       <a class="nav-link${active("#/objectives")}" href="#/objectives"><span class="nav-text">Objectives checklist</span><span class="nav-num">${done}/${allObjectives.length}</span></a>
       <div class="mini-bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div>
+      <a class="nav-link${active("#/host")}" href="#/host"><span class="nav-text">Lab host</span><span class="dot ${hostDotClass()}" id="hostDot" title="${esc(hostDotTitle())}"></span></a>
+      <a class="nav-link${active("#/notes")}" href="#/notes"><span class="nav-text">My notes</span><span class="nav-num">${Object.values(state.notes).filter((n) => n.text.trim()).length || ""}</span></a>
     </div>
     `;
     if (lectures.length) {
@@ -145,7 +147,7 @@
     const how = KIT.readme.split(/^## /m).find((p) => /^Suggested study plan/.test(p));
     if (how) app.appendChild(md(how.replace(/^.*\n/, "")));
     app.appendChild(el(`<div class="footer">Progress lives in this browser only. <a href="#" id="resetAll">Reset all progress</a></div>`));
-    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses and best times?")) { state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, theme: state.theme }; save(); route(); } };
+    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses, grader history and best times? (Your notes are kept.)")) { state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, notes: state.notes, history: {}, theme: state.theme }; save(); route(); } };
   }
 
   function pageSetup() {
@@ -182,6 +184,7 @@
       app.appendChild(el(`<p class="lede" style="margin-bottom:12px">Tick an objective when you can do it from memory, without the guide.</p>`));
       app.appendChild(objList(g));
     }
+    attachNotes(("guide-" + s.slug).slice(0, 64).replace(/-+$/, ""), "Study guide: " + s.title);
     app.appendChild(pager(i > 0 && sections[i - 1], sections[i + 1], (x) => "#/guide/" + x.slug, (x) => (x.num ? x.num + ". " : "") + x.title));
   }
 
@@ -226,6 +229,7 @@
     const mark = el(`<div class="btn-row"><button class="btn${state.read[l.num] ? "" : " primary"}" id="markRead">${state.read[l.num] ? "✓ Read (click to undo)" : "Mark lecture as read"}</button></div>`);
     mark.querySelector("button").onclick = () => { if (state.read[l.num]) delete state.read[l.num]; else state.read[l.num] = true; save(); pageLecture(num); renderSidebar(location.hash); };
     app.appendChild(mark);
+    attachNotes("lecture-" + l.num, "Lecture " + l.num + ": " + l.title);
     app.appendChild(pager(i > 0 && lectures[i - 1], lectures[i + 1], (x) => "#/lecture/" + x.num, (x) => "Lecture " + x.num + " · " + x.title));
   }
 
@@ -298,7 +302,7 @@
       </div>`;
     const cmds = "```bash\n./lab start " + l.id + "     # build and boot the scenario, print the tasks\n./lab shell " + l.id + "     # root shell" +
       (l.runtime === "vm" ? " (vagrant ssh + sudo -i)" : "") + "\n./lab check " + l.id + "     # grade yourself, as often as you like\n./lab reset " + l.id + "     # start over\n```";
-    app.appendChild(md(cmds));
+    const cmdBox = md(cmds); cmdBox.classList.add("lab-cmds"); app.appendChild(cmdBox);
     if (l.runtime === "vm") app.appendChild(el(`<div class="callout vm">This lab needs the Vagrant VM (real kernel, disks or bootloader). The grader re-checks after a reboot, so reboot before you call it done. See <a href="#/setup">setup</a>.</div>`));
     app.appendChild(el(`<h2>Tasks</h2>`));
     if (hasVars) app.appendChild(el(`<p class="callout">Boxed names such as <var>DISK1</var> or <var>IFACE</var> are placeholders: <code>./lab tasks ${l.id}</code> (or <code>sudo labctl tasks</code> in the VM) prints them with your VM's real device names.</p>`));
@@ -320,6 +324,7 @@
     if (sec.length) app.appendChild(el(`<p>Read first: ${sec.map((s) => `<a href="#/guide/${s.slug}">Section ${s.num}, ${esc(s.title)}</a>`).join(" · ")}</p>`));
     app.appendChild(pager(i > 0 && KIT.labs[i - 1], KIT.labs[i + 1], (x) => "#/lab/" + x.id, (x) => "Lab " + x.id + " · " + shortTitle(x.title)));
 
+    buildConsole(l);
     // status
     app.querySelectorAll("#status button").forEach((b) => (b.onclick = () => {
       state.labs[l.id] = b.dataset.v; save();
@@ -349,6 +354,476 @@
   function pager(prev, next, href, label) {
     return el(`<nav class="pager">${prev ? `<a href="${href(prev)}"><small>← Previous</small>${esc(label(prev))}</a>` : ""}${next ? `<a class="next" href="${href(next)}"><small>Next →</small>${esc(label(next))}</a>` : ""}</nav>`);
   }
+
+
+  /* ======================================================================
+     Lab host: talks to agent/labkit-agent.py on your lab machine
+     ====================================================================== */
+  const HOST_KEY = "rhcsa-agent-v1";
+  let host = { url: "", token: "" };
+  try { Object.assign(host, JSON.parse(localStorage.getItem(HOST_KEY) || "{}")); } catch (e) {}
+  const servedByAgent = /^https?:$/.test(location.protocol) && !/github\.io$/.test(location.hostname);
+  const hostUrl = () => (host.url || (servedByAgent ? location.origin : "")).replace(/\/+$/, "");
+  const hostReady = () => !!(hostUrl() && host.token);
+  const saveHost = () => { try { localStorage.setItem(HOST_KEY, JSON.stringify(host)); } catch (e) {} };
+  let hostStatus = null;
+  const wideMQ = matchMedia("(min-width: 1280px)");
+
+  async function api(path, opts = {}) {
+    const r = await fetch(hostUrl() + "/api/" + path, { ...opts, cache: "no-store",
+      headers: { Authorization: "Bearer " + host.token, ...(opts.body ? { "Content-Type": "application/json" } : {}) } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+    return j;
+  }
+  async function refreshStatus() {
+    if (!hostReady()) { hostStatus = null; updateHostDot(); return null; }
+    try { hostStatus = await api("status"); } catch (e) { hostStatus = { error: e.message === "Failed to fetch" ? "can't reach the agent (is it running, and is this device on your tailnet?)" : e.message }; }
+    updateHostDot();
+    return hostStatus;
+  }
+  function hostDotClass() { return !hostReady() ? "" : !hostStatus ? "progress" : hostStatus.error ? "bad" : "done"; }
+  function hostDotTitle() { return !hostReady() ? "Not set up" : !hostStatus ? "Connecting…" : hostStatus.error ? hostStatus.error : "Connected to " + hostStatus.host; }
+  function updateHostDot() { const d = document.getElementById("hostDot"); if (d) { d.className = "dot " + hostDotClass(); d.title = hostDotTitle(); } }
+  const stripAnsi = (t) => t.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b[()][A-Z0-9]/g, "").replace(/\r(?!\n)/g, "\n");
+  const ago = (ms) => { const s = (Date.now() - ms) / 1000; return s < 60 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago"; };
+
+  function pageHost() {
+    app.innerHTML = `<div class="eyebrow">Interactive labs</div><h1>Lab host</h1>
+      <p class="lede">Connect this site to <code>labkit-agent</code> on your lab machine. Lab pages then get Start, Check and Reset buttons and a root shell in the browser, and your notes are backed up to git. The address and token are stored only in this browser.</p>
+      <div class="card host-form">
+        <label><span>Agent URL</span><input id="hUrl" type="url" spellcheck="false" placeholder="${servedByAgent ? esc(location.origin) + " (this page)" : "https://labhost.your-tailnet.ts.net"}"></label>
+        <label><span>Token</span><input id="hTok" type="password" spellcheck="false" autocomplete="off" placeholder="python3 agent/labkit-agent.py token"></label>
+        <div class="btn-row"><button class="btn primary" id="hSave">Save and test</button><button class="btn" id="hForget">Forget this host</button></div>
+        <div id="hOut"></div>
+      </div>`;
+    const u = document.getElementById("hUrl"), t = document.getElementById("hTok"), out = document.getElementById("hOut");
+    u.value = host.url; t.value = host.token;
+    const show = () => {
+      if (!hostReady()) { out.innerHTML = `<p class="callout">Not connected. Set up the agent with the steps below.</p>`; return; }
+      if (!hostStatus) { out.innerHTML = `<p class="callout">Connecting…</p>`; return; }
+      if (hostStatus.error) { out.innerHTML = `<p class="callout bad">✗ ${esc(hostStatus.error)}</p>`; return; }
+      const s = hostStatus, n = s.notes || {};
+      out.innerHTML = `<div class="callout ok"><b>✓ Connected to ${esc(s.host)}</b> · agent ${esc(s.version)} · ${esc(s.engine)}</div>
+        <div class="host-facts">
+          <div><span>Lab containers running</span><b>${s.containers.length ? s.containers.map((c) => `<a href="#/lab/${c}">Lab ${c}</a>`).join(", ") : "none"}</b></div>
+          <div><span>Lab VM</span><b>${esc(s.vm.replace(/_/g, " "))}${s.vm_lab ? ` · last set up for <a href="#/lab/${s.vm_lab}">Lab ${s.vm_lab}</a>` : ""}</b></div>
+          <div><span>Running now</span><b>${s.busy ? esc(s.busy.action + " lab " + s.busy.lab) : "nothing"}</b></div>
+          <div><span>Notes backup</span><b>${!n.git ? "notes folder is not a git repo" : (n.last_commit ? "last commit " + ago(n.last_commit) : "no commits yet") + (n.remote ? (n.unpushed ? ` · ${n.unpushed} not pushed yet` : " · pushed") : " · no remote yet (see below)")}</b></div>
+        </div>`;
+    };
+    document.getElementById("hSave").onclick = async () => {
+      host.url = u.value.trim().replace(/\/+$/, ""); host.token = t.value.trim(); saveHost();
+      if (host.url && location.protocol === "https:" && /^http:/.test(host.url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(host.url)) {
+        out.innerHTML = `<p class="callout bad">This page is HTTPS, so the browser will block a plain-http agent. Use <code>tailscale serve</code> for an https://…ts.net address, or http://localhost.</p>`; return;
+      }
+      hostStatus = null; show(); await refreshStatus(); show();
+      if (hostStatus && !hostStatus.error) syncAllNotes();
+    };
+    document.getElementById("hForget").onclick = () => { host = { url: "", token: "" }; saveHost(); hostStatus = null; u.value = t.value = ""; updateHostDot(); show(); };
+    show(); if (hostReady()) refreshStatus().then(show);
+    app.appendChild(el(`<h2>Set up the agent</h2>`));
+    app.appendChild(md((KIT.agent || "").replace(/^# .*\n/, "")));
+  }
+
+  /* ---------- lab console: buttons, job output, browser terminal ---------- */
+  let con = null; // { l, root, term, fit, ws, poll, ro }
+  function teardownConsole() {
+    if (!con) return;
+    clearTimeout(con.poll);
+    if (con.ws) { con.ws.onclose = null; con.ws.close(); }
+    if (con.ro) con.ro.disconnect();
+    if (con.term) con.term.dispose();
+    wideMQ.removeEventListener?.("change", con.place);
+    con.root.remove(); con = null;
+    rail.innerHTML = "";
+    document.querySelector(".layout").classList.remove("has-console");
+  }
+
+  function buildConsole(l) {
+    const ready = hostReady();
+    const root = el(`<section class="console card" aria-label="Lab console">
+      <div class="con-bar">
+        <span class="con-state" id="cState">${ready ? "Connecting…" : "No lab host"}</span>
+        <div class="con-btns">
+          <button class="btn primary" data-a="start" title="./lab start ${l.id}">Start</button>
+          <button class="btn" data-a="check" title="./lab check ${l.id}">Check</button>
+          <button class="btn" data-a="reset" title="./lab reset ${l.id}">Reset</button>
+          <button class="btn" data-a="stop" title="./lab stop ${l.id}">Stop</button>
+        </div>
+      </div>
+      <div class="con-tabs" role="tablist"><button data-t="term" class="on">Terminal</button><button data-t="out">Output <span class="con-score" id="cScore"></span></button><button data-t="notes">Notes</button><button data-t="hist">History</button></div>
+      <div class="con-pane" data-p="term"><div class="term-wrap"><div class="term" id="cTerm"></div>
+        <div class="term-cover" id="cCover">${ready
+          ? `<button class="btn primary" id="cOpen">Open root shell</button><p>Runs <code>./lab shell ${l.id}</code> on your lab host${l.runtime === "vm" ? " (the VM, as root)" : " (inside the lab container)"}. Start the lab first.</p>`
+          : `<p><b>Run this lab from the browser.</b> Connect your lab machine on the <a href="#/host">Lab host</a> page to get Start/Check/Reset and a root shell here.</p><p>Until then, use the commands on the left in your own terminal.</p>`}</div></div></div>
+      <div class="con-pane" data-p="out" hidden><pre class="job-out" id="cOut">Output from Start, Check and Reset appears here.</pre></div>
+      <div class="con-pane" data-p="notes" hidden></div>
+      <div class="con-pane" data-p="hist" hidden></div>
+    </section>`);
+    con = { l, root };
+    root.querySelector('[data-p="notes"]').appendChild(notesEditor("lab-" + l.id, "Lab " + l.id + ": " + shortTitle(l.title)));
+    const tabs = root.querySelectorAll(".con-tabs button");
+    const showTab = (t) => {
+      tabs.forEach((b) => b.classList.toggle("on", b.dataset.t === t));
+      root.querySelectorAll(".con-pane").forEach((p) => (p.hidden = p.dataset.p !== t));
+      if (t === "term" && con.fit) setTimeout(() => con && con.fit && con.fit.fit(), 0);
+      if (t === "hist") renderHistory(l, root.querySelector('[data-p="hist"]'));
+    };
+    con.showTab = showTab;
+    tabs.forEach((b) => (b.onclick = () => showTab(b.dataset.t)));
+    root.querySelectorAll(".con-btns button").forEach((b) => {
+      b.disabled = !ready;
+      b.onclick = () => runAction(b.dataset.a);
+    });
+    if (ready) root.querySelector("#cOpen").onclick = openTerm;
+
+    // Wide screens: console fills the right column next to the tasks. Narrow: inline under the toolbar.
+    con.place = () => {
+      const lay = document.querySelector(".layout");
+      if (wideMQ.matches) { rail.innerHTML = ""; rail.appendChild(root); lay.classList.add("has-console"); }
+      else { lay.classList.remove("has-console"); const after = app.querySelector(".lab-cmds"); after ? after.after(root) : app.appendChild(root); }
+      if (con.fit) setTimeout(() => con && con.fit && con.fit.fit(), 50);
+    };
+    con.place();
+    wideMQ.addEventListener?.("change", con.place);
+    if (ready) refreshStatus().then(updateConState);
+  }
+
+  function updateConState() {
+    if (!con) return;
+    const st = con.root.querySelector("#cState"), id = con.l.id;
+    if (!hostStatus) return;
+    if (hostStatus.error) { st.className = "con-state bad"; st.textContent = "Lab host unreachable"; st.title = hostStatus.error; return; }
+    const up = con.l.runtime === "vm" ? hostStatus.vm === "running" && hostStatus.vm_lab === id : hostStatus.containers.includes(id);
+    const busy = hostStatus.busy;
+    st.className = "con-state " + (busy ? "busy" : up ? "ok" : "");
+    st.textContent = busy ? `${busy.action}ing lab ${busy.lab}…` : up ? "Lab running" : con.l.runtime === "vm" && hostStatus.vm === "running" ? (hostStatus.vm_lab ? `VM has lab ${hostStatus.vm_lab}` : "VM running") : "Lab not running";
+    st.title = hostStatus.host;
+  }
+
+  async function runAction(a) {
+    if (!con) return;
+    const l = con.l;
+    if (a === "reset" && !confirm(`Throw away lab ${l.id} and rebuild it from scratch?`)) return;
+    const out = con.root.querySelector("#cOut");
+    const btns = con.root.querySelectorAll(".con-btns button");
+    con.showTab("out");
+    out.textContent = `$ ./lab ${a} ${l.id}\n`;
+    let job;
+    try { job = (await api(`labs/${l.id}/${a}`, { method: "POST" })).job; }
+    catch (e) { out.textContent += "✗ " + e.message + "\n"; return; }
+    if (a !== "check") btns.forEach((b) => (b.disabled = true));
+    if ((a === "start" || a === "reset") && (state.labs[l.id] || "todo") === "todo") setLabStatus(l.id, "progress");
+    const st = con.root.querySelector("#cState"); st.className = "con-state busy"; st.textContent = a === "check" ? "Grading…" : `${a}ing…`;
+    let off = 0, text = "";
+    const tick = async () => {
+      if (!con || con.l !== l) return;
+      let j;
+      try { j = await api(`jobs/${job}?offset=${off}`); } catch (e) { out.textContent += "\n✗ " + e.message; btns.forEach((b) => (b.disabled = false)); return; }
+      off = j.offset; text += j.output;
+      const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+      out.textContent = `$ ./lab ${a} ${l.id}\n` + stripAnsi(text);
+      if (nearBottom) out.scrollTop = out.scrollHeight;
+      if (!j.done) { con.poll = setTimeout(tick, 700); return; }
+      btns.forEach((b) => (b.disabled = false));
+      out.textContent += `\n[exit ${j.rc}]`;
+      if (a === "check") gradeResult(l, stripAnsi(text));
+      await refreshStatus(); updateConState();
+      if ((a === "start" || a === "reset") && j.rc === 0) { con.showTab("term"); if (con.ws) { con.ws.close(); } else openTerm(); }
+    };
+    tick();
+  }
+
+  function setLabStatus(id, v) {
+    state.labs[id] = v; save();
+    app.querySelectorAll("#status button").forEach((x) => x.classList.toggle("on", x.dataset.v === v));
+    renderSidebar(location.hash);
+  }
+
+  function gradeResult(l, text) {
+    const m = text.match(/Score:\s*(\d+)\s*\/\s*(\d+)/);
+    const badge = con.root.querySelector("#cScore");
+    if (!m) { badge.textContent = "?"; badge.className = "con-score"; return; }
+    const p = +m[1], n = +m[2];
+    const fails = (text.match(/^\s*FAIL .*$/gm) || []).map((x) => x.trim().replace(/^FAIL\s+/, ""));
+    (state.history[l.id] = state.history[l.id] || []).push({ t: Date.now(), p, n, fails: fails.slice(0, 30) });
+    if (state.history[l.id].length > 50) state.history[l.id].shift();
+    save();
+    badge.textContent = `${p}/${n}`; badge.className = "con-score " + (p === n ? "ok" : "bad");
+    if (p === n && state.labs[l.id] !== "done") setLabStatus(l.id, "done");
+  }
+
+  function renderHistory(l, box) {
+    const h = (state.history[l.id] || []).slice().reverse();
+    if (!h.length) { box.innerHTML = `<p class="empty">No graded runs yet. Press <b>Check</b> to grade your work; every run is recorded here.</p>`; return; }
+    const best = Math.max(...h.map((r) => r.p / r.n));
+    box.innerHTML = `<div class="hist-sum">${h.length} graded run${h.length > 1 ? "s" : ""} · best ${Math.round(best * 100)}%</div>` +
+      h.map((r) => `<details class="hist-row"><summary><span class="hist-bar"><i style="width:${pct(r.p, r.n)}%" class="${r.p === r.n ? "ok" : ""}"></i></span><b>${r.p}/${r.n}</b><span class="muted">${new Date(r.t).toLocaleString()}</span></summary>${r.fails && r.fails.length ? `<ul>${r.fails.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "<p>All checks passed.</p>"}</details>`).join("");
+  }
+
+  function openTerm() {
+    if (!con || con.ws) return;
+    if (typeof Terminal === "undefined") { alert("Terminal library failed to load."); return; }
+    const l = con.l, box = con.root.querySelector("#cTerm");
+    con.root.querySelector("#cCover").hidden = true;
+    if (!con.term) {
+      con.term = new Terminal({ fontFamily: '"JetBrains Mono", ui-monospace, monospace', fontSize: 13.5, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, allowProposedApi: false,
+        theme: { background: "#0e0f11", foreground: "#e6e6e6", cursor: "#ff5468", selectionBackground: "#ff546855" } });
+      con.fit = new FitAddon.FitAddon(); con.term.loadAddon(con.fit); con.term.open(box);
+      const enc = new TextEncoder();
+      con.term.onData((d) => con.ws && con.ws.readyState === 1 && con.ws.send(enc.encode(d)));
+      con.term.onBinary((d) => con.ws && con.ws.readyState === 1 && con.ws.send(Uint8Array.from(d, (c) => c.charCodeAt(0) & 255)));
+      con.term.onResize(({ cols, rows }) => con.ws && con.ws.readyState === 1 && con.ws.send(JSON.stringify({ cols, rows })));
+      con.ro = new ResizeObserver(() => { try { con.fit.fit(); } catch (e) {} }); con.ro.observe(box);
+    }
+    try { con.fit.fit(); } catch (e) {}
+    const term = con.term;
+    term.write(`\x1b[2mConnecting to lab ${l.id}…\x1b[0m\r\n`);
+    const ws = new WebSocket(hostUrl().replace(/^http/, "ws") + "/api/term?lab=" + l.id);
+    ws.binaryType = "arraybuffer"; con.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ token: host.token, cols: term.cols, rows: term.rows }));
+    ws.onmessage = (e) => {
+      if (typeof e.data === "string") { try { const m = JSON.parse(e.data); if (m.error) term.write(`\r\n\x1b[31m${m.error}\x1b[0m\r\n`); } catch (x) {} return; }
+      term.write(new Uint8Array(e.data));
+    };
+    ws.onclose = () => {
+      if (!con || con.ws !== ws) return;
+      con.ws = null;
+      term.write("\r\n\x1b[2m[shell closed]\x1b[0m\r\n");
+      const cover = con.root.querySelector("#cCover"); cover.hidden = false;
+      cover.querySelector("p").textContent = "The shell ended (you logged out, the lab was reset, or the connection dropped).";
+      cover.querySelector("button").textContent = "Reconnect";
+    };
+    term.focus();
+  }
+
+  /* ---------- notes: Markdown, saved in this browser and synced to the lab host's git repo ---------- */
+  let notesEl = null, currentNoteKey = null;
+  function attachNotes(key, title) {
+    currentNoteKey = key;
+    notesEl = notesEditor(key, title);
+    notesEl.classList.add("page-notes");
+    placeNotes(false);
+  }
+  function placeNotes(railOn) {
+    if (!notesEl) return;
+    if (railOn && wideMQ.matches) { rail.appendChild(notesEl); notesEl.classList.add("in-rail"); }
+    else { notesEl.classList.remove("in-rail"); const pg = app.querySelector(".pager"); pg ? pg.before(notesEl) : app.appendChild(notesEl); }
+  }
+  wideMQ.addEventListener?.("change", () => { if (notesEl) placeNotes(document.querySelector(".layout").classList.contains("has-rail")); });
+
+  const pushTimers = {};
+  function pushNote(key, cb) {
+    const n = state.notes[key];
+    if (!n || !hostReady()) { cb && cb(hostReady() ? "" : "Saved in this browser only (no lab host)"); return; }
+    api("notes/" + key, { method: "PUT", body: JSON.stringify({ text: n.text, updated: n.updated }) })
+      .then((r) => { n.synced = r.updated; save(); cb && cb("Synced to lab host"); })
+      .catch((e) => cb && cb("Saved in this browser · sync failed: " + e.message));
+  }
+  async function syncAllNotes() {
+    if (!hostReady()) return 0;
+    let changed = 0;
+    try {
+      const remote = (await api("notes")).notes;
+      for (const [k, t] of Object.entries(remote)) {
+        const n = state.notes[k];
+        if (!n || (t > (n.updated || 0) && t !== n.synced)) { const r = await api("notes/" + k); state.notes[k] = { text: r.text, updated: r.updated, synced: r.updated }; changed++; }
+      }
+      for (const [k, n] of Object.entries(state.notes)) if ((n.updated || 0) > (n.synced || 0) && (!remote[k] || n.updated > remote[k])) { await new Promise((ok) => pushNote(k, ok)); changed++; }
+      save();
+    } catch (e) {}
+    return changed;
+  }
+
+  function notesEditor(key, title) {
+    const n = state.notes[key] || { text: "", updated: 0, synced: 0 };
+    const box = el(`<div class="notes">
+      <div class="notes-head"><span class="rail-label">My notes</span><span class="notes-st"></span><button class="link-btn" type="button">Preview</button></div>
+      <textarea spellcheck="true" placeholder="Notes for ${esc(title)}. Markdown works. Saved as you type${hostReady() ? " and backed up to your lab host" : ""}."></textarea>
+      <div class="notes-prev" hidden></div></div>`);
+    const ta = box.querySelector("textarea"), st = box.querySelector(".notes-st"), pv = box.querySelector(".notes-prev"), tog = box.querySelector(".link-btn");
+    const status = (t) => (st.textContent = t || "");
+    ta.value = n.text;
+    const grow = () => { if (!box.classList.contains("in-rail") && !box.closest(".console")) { ta.style.height = "auto"; ta.style.height = Math.max(160, ta.scrollHeight + 4) + "px"; } };
+    setTimeout(grow, 0);
+    ta.addEventListener("input", () => {
+      n.text = ta.value; n.updated = Date.now(); state.notes[key] = n; save(); grow();
+      status("Saving…");
+      clearTimeout(pushTimers[key]);
+      pushTimers[key] = setTimeout(() => pushNote(key, (m) => status(m || "Saved")), 1200);
+      ghSchedule(key, status);
+    });
+    ta.addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end"); ta.dispatchEvent(new Event("input")); } });
+    tog.onclick = () => {
+      const show = pv.hidden;
+      pv.hidden = !show; ta.hidden = show; tog.textContent = show ? "Edit" : "Preview";
+      if (show) { pv.innerHTML = ""; pv.appendChild(n.text.trim() ? md(n.text) : el(`<p class="empty">Nothing yet.</p>`)); }
+    };
+    if (hostReady()) {
+      api("notes/" + key).then((r) => {
+        if (r.updated > (n.updated || 0) && r.text !== n.text && document.activeElement !== ta) {
+          Object.assign(n, { text: r.text, updated: r.updated, synced: r.updated }); state.notes[key] = n; save(); ta.value = r.text; grow(); status("Loaded from lab host");
+        } else if ((n.updated || 0) > (n.synced || 0) && n.text) pushNote(key, status);
+        else status(r.updated || n.text ? "Synced" : "");
+      }).catch(() => status(n.text ? "Saved in this browser (lab host offline)" : ""));
+    } else status(n.text ? "Saved in this browser" : "");
+    if (ghReady()) ghPullOne(key).then((r) => {
+      if (r === "pulled") { ta.value = state.notes[key].text; Object.assign(n, state.notes[key]); grow(); status("Loaded from GitHub"); }
+      else if (r === "pushed") status("Backed up to GitHub");
+    }).catch((e) => status("GitHub: " + e.message));
+    return box;
+  }
+
+  const noteSource = (k) => {
+    let m;
+    if ((m = k.match(/^lecture-(\d+)$/)) && lectureByNum(m[1])) return { title: "Lecture " + m[1] + ": " + lectureByNum(m[1]).title, href: "#/lecture/" + m[1], order: "1" + m[1].padStart(2, "0") };
+    if ((m = k.match(/^lab-(\d\d)$/)) && labById(m[1])) return { title: "Lab " + m[1] + ": " + shortTitle(labById(m[1]).title), href: "#/lab/" + m[1], order: "3" + m[1] };
+    if ((m = k.match(/^guide-(.+)$/))) { const s = sections.find((x) => ("guide-" + x.slug).slice(0, 64).replace(/-+$/, "") === k); if (s) return { title: "Study guide: " + s.title, href: "#/guide/" + s.slug, order: "2" + String(sections.indexOf(s)).padStart(2, "0") }; }
+    return { title: k, href: null, order: "9" + k };
+  };
+  function pageNotes() {
+    app.innerHTML = `<div class="eyebrow">Notes</div><h1>My notes</h1>
+      <p class="lede">Every lecture, study guide section and lab has a notes box, and they are all collected here. Notes save in this browser as you type${ghReady() ? ", are committed to <a href=\"https://github.com/" + esc(ghCfg.repo) + "\">" + esc(ghCfg.repo) + "</a> on GitHub" : ""}${hostReady() ? " and are synced to your lab host" : ""}.</p>
+      <div class="btn-row"><button class="btn" id="nDl">Download all (.md)</button>${ghReady() || hostReady() ? `<button class="btn" id="nSync">Sync now</button>` : ""}<span class="muted" id="nMsg"></span></div>`;
+    app.appendChild(ghCard(() => pageNotes()));
+    app.appendChild(el(`<div id="nList"></div>`));
+    const render = () => {
+      const list = document.getElementById("nList"); if (!list) return;
+      const items = Object.entries(state.notes).filter(([, n]) => n.text.trim()).map(([k, n]) => ({ k, n, ...noteSource(k) })).sort((a, b) => a.order.localeCompare(b.order));
+      list.innerHTML = items.length ? "" : `<p class="empty">No notes yet. Open any lecture or lab and start typing in the notes box.</p>`;
+      for (const it of items) {
+        const c = el(`<section class="card note-card"><div class="note-top">${it.href ? `<a href="${it.href}"><b>${esc(it.title)}</b></a>` : `<b>${esc(it.title)}</b>`}<span class="muted">${ago(it.n.updated)}</span></div></section>`);
+        c.appendChild(md(it.n.text)); list.appendChild(c);
+      }
+      return items;
+    };
+    let items = render();
+    document.getElementById("nDl").onclick = () => {
+      const txt = "# RHCSA notes\n\n" + items.map((it) => `## ${it.title}\n\n${it.n.text.trim()}\n`).join("\n");
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([txt], { type: "text/markdown" })); a.download = "rhcsa-notes.md"; a.click();
+    };
+    const syncBtn = document.getElementById("nSync");
+    const doSync = async () => {
+      const msg = document.getElementById("nMsg"); if (msg) msg.textContent = "Syncing…";
+      let c = 0, err = "";
+      if (ghReady()) { try { c += await ghSyncAll(); } catch (e) { err = "GitHub: " + e.message; } }
+      if (hostReady()) { c += await syncAllNotes(); try { await api("notes/sync", { method: "POST" }); } catch (e) {} }
+      if (document.getElementById("nMsg")) { document.getElementById("nMsg").textContent = err || (c ? `${c} note(s) synced` : "Everything is backed up"); items = render(); }
+    };
+    if (syncBtn) { syncBtn.onclick = doSync; doSync(); }
+  }
+
+
+  /* ---------- notes backup straight to a private GitHub repo (works without a lab host) ---------- */
+  const GH_KEY = "rhcsa-ghnotes-v1";
+  let ghCfg = { repo: "Braden-Develops/rhcsa-notes", token: "" };
+  try { Object.assign(ghCfg, JSON.parse(localStorage.getItem(GH_KEY) || "{}")); } catch (e) {}
+  const ghReady = () => !!(ghCfg.repo && ghCfg.token);
+  const ghSave = () => { try { localStorage.setItem(GH_KEY, JSON.stringify(ghCfg)); } catch (e) {} };
+  async function gh(path, opts = {}) {
+    const r = await fetch(`https://api.github.com/repos/${ghCfg.repo}${path}`, { ...opts, cache: "no-store",
+      headers: { Authorization: "Bearer " + ghCfg.token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(r.status === 401 ? "token rejected (expired or wrong?)" : r.status === 404 ? "repo not found, or the token can't see it" : j.message || "HTTP " + r.status); e.status = r.status; e.body = j; throw e; }
+    return j;
+  }
+  const b64enc = (str) => { const b = new TextEncoder().encode(str); let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+  const b64dec = (c) => new TextDecoder().decode(Uint8Array.from(atob(c.replace(/\s/g, "")), (x) => x.charCodeAt(0)));
+  const ghPending = (n) => (n.updated || 0) > (n.ghAt || 0);
+
+  async function ghPush(key) {
+    const n = state.notes[key]; if (!n) return;
+    const at = n.updated;
+    const body = (sha) => JSON.stringify({ message: "Notes: " + noteSource(key).title, content: b64enc(n.text), ...(sha ? { sha } : {}) });
+    let r;
+    try { r = await gh(`/contents/${key}.md`, { method: "PUT", body: body(n.ghSha) }); }
+    catch (e) {
+      if (e.status !== 409 && e.status !== 422) throw e;
+      // our sha is stale (edited on another device): this browser's newer text wins, on top of the latest version
+      let sha; try { sha = (await gh(`/contents/${key}.md`)).sha; } catch (x) { if (x.status !== 404) throw x; }
+      r = await gh(`/contents/${key}.md`, { method: "PUT", body: body(sha) });
+    }
+    n.ghSha = r.content.sha; n.ghAt = at; save();
+  }
+  const ghTimers = {};
+  function ghSchedule(key, status) {
+    if (!ghReady()) return;
+    clearTimeout(ghTimers[key]);
+    ghTimers[key] = setTimeout(() => { delete ghTimers[key]; ghPush(key).then(() => status && status("Backed up to GitHub")).catch((e) => status && status("GitHub backup failed: " + e.message)); }, 15000);
+  }
+  // Flush pending GitHub pushes when the tab is hidden or closed.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") return;
+    for (const k of Object.keys(ghTimers)) { clearTimeout(ghTimers[k]); delete ghTimers[k]; ghPush(k).catch(() => {}); }
+  });
+
+  // One note: pull it if GitHub has a version this browser hasn't seen and we have no unsynced edits; push if we do.
+  async function ghPullOne(key) {
+    const n = state.notes[key];
+    let f = null;
+    try { f = await gh(`/contents/${key}.md`); } catch (e) { if (e.status !== 404) throw e; }
+    if (f && (!n || (f.sha !== n.ghSha && !ghPending(n)))) {
+      state.notes[key] = Object.assign(n || {}, { text: b64dec(f.content), updated: Date.now(), ghSha: f.sha }); state.notes[key].ghAt = state.notes[key].updated; save();
+      return "pulled";
+    }
+    if (n && n.text && (ghPending(n) || !f)) { await ghPush(key); return "pushed"; }
+    return "same";
+  }
+  async function ghSyncAll() {
+    let list = [];
+    try { list = await gh("/contents/"); } catch (e) { if (!(e.status === 404 && /empty/i.test((e.body && e.body.message) || ""))) throw e; }
+    let c = 0;
+    const remote = new Map(list.filter((f) => f.type === "file" && /^[a-z0-9][a-z0-9-]{0,63}\.md$/.test(f.name) && f.name !== "README.md").map((f) => [f.name.slice(0, -3), f.sha]));
+    for (const [k, sha] of remote) {
+      const n = state.notes[k];
+      if (!n || (sha !== n.ghSha && !ghPending(n))) { const f = await gh(`/contents/${k}.md`); state.notes[k] = Object.assign(n || {}, { text: b64dec(f.content), updated: Date.now(), ghSha: f.sha }); state.notes[k].ghAt = state.notes[k].updated; c++; }
+    }
+    for (const [k, n] of Object.entries(state.notes)) if (n.text && (ghPending(n) || !remote.has(k))) { await ghPush(k); c++; }
+    save();
+    return c;
+  }
+
+  function ghCard(onChange) {
+    const box = el(`<details class="spoiler gh-card"${ghReady() ? "" : " open"}><summary>GitHub backup <span class="hint">${ghReady() ? "on: " + esc(ghCfg.repo) : "off: notes are only in this browser"}</span></summary><div class="inner">
+      <p>The site commits each note to a <b>private</b> repo, about 15 seconds after you stop typing (and when you leave the page). It uses a fine-grained token that can only read and write that one repo. Your notes follow you to any browser where you paste the token.</p>
+      <ol>
+        <li>Create an empty private repo, for example <code>rhcsa-notes</code>.</li>
+        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a>: Repository access → <b>Only select repositories</b> → that repo; Permissions → <b>Contents: Read and write</b>. Nothing else.</li>
+        <li>Paste it below.</li>
+      </ol>
+      <div class="host-form" style="box-shadow:none;border:0;padding:0">
+        <label><span>Repo (owner/name)</span><input id="gRepo" spellcheck="false"></label>
+        <label><span>Token</span><input id="gTok" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_…"></label>
+        <div class="btn-row"><button class="btn primary" id="gSave">Save and sync</button>${ghReady() ? `<button class="btn" id="gOff">Turn off on this browser</button>` : ""}</div>
+        <div id="gOut"></div>
+      </div>
+      <p class="muted">The token is kept in this browser's local storage. Every site under braden-develops.github.io shares that storage, which is fine as long as they are all yours; the token can't touch anything except the notes repo.</p>
+    </div></details>`);
+    const repo = box.querySelector("#gRepo"), tok = box.querySelector("#gTok"), out = box.querySelector("#gOut");
+    repo.value = ghCfg.repo; tok.value = ghCfg.token;
+    box.querySelector("#gSave").onclick = async () => {
+      ghCfg.repo = repo.value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$|\/+$/g, ""); ghCfg.token = tok.value.trim();
+      out.innerHTML = `<p class="callout">Checking…</p>`;
+      try {
+        const info = await gh("");
+        if (!info.private) { out.innerHTML = `<p class="callout bad">${esc(ghCfg.repo)} is <b>public</b>. Make it private (Settings → Danger zone) before putting notes in it.</p>`; return; }
+        if (info.permissions && !info.permissions.push) { out.innerHTML = `<p class="callout bad">The token can read the repo but not write to it. Give it Contents: Read and write.</p>`; return; }
+        ghSave();
+        out.innerHTML = `<p class="callout">Connected. Syncing…</p>`;
+        const c = await ghSyncAll();
+        out.innerHTML = `<p class="callout ok">✓ Backing up to ${esc(ghCfg.repo)}. ${c} note(s) synced.</p>`;
+        setTimeout(onChange, 1200);
+      } catch (e) { out.innerHTML = `<p class="callout bad">✗ ${esc(e.message)}</p>`; }
+    };
+    const off = box.querySelector("#gOff");
+    if (off) off.onclick = () => { ghCfg.token = ""; ghSave(); onChange(); };
+    return box;
+  }
+  if (ghReady()) ghSyncAll().catch(() => {});
+
+  // Connect in the background on load, so the sidebar dot and notes are current.
+  if (hostReady()) refreshStatus().then((s) => { if (s && !s.error) syncAllNotes(); });
 
   /* ---------- search ---------- */
   const index = [];
@@ -408,6 +883,8 @@
   /* ---------- router ---------- */
   function route() {
     if (timer) { clearInterval(timer); timer = null; }
+    teardownConsole();
+    notesEl = null; currentNoteKey = null;
     const h = location.hash || "#/";
     const [, page, arg] = h.match(/^#\/([^/]*)\/?(.*)$/) || [];
     document.body.classList.remove("nav-open");
@@ -421,27 +898,32 @@
     else if (page === "labs") pageLabs();
     else if (page === "lab") pageLab(arg);
     else if (page === "setup") pageSetup();
+    else if (page === "host") pageHost();
+    else if (page === "notes") pageNotes();
     else { pageHome(); navKey = "#/"; }
     renderSidebar(navKey);
     const t = app.querySelector("h1");
     document.title = (t && navKey !== "#/" ? t.textContent + " · " : "") + "RHCSA Study Kit";
     if (page !== "search") window.scrollTo(0, 0);
     const a = sidebar.querySelector(".active"); if (a) a.scrollIntoView({ block: "nearest" });
-    buildRail(["lecture", "guide", "lab"].includes(page) && arg ? page : null);
+    buildRail(["lecture", "guide"].includes(page) && arg ? page : null, currentNoteKey);
   }
 
   /* ---------- right rail (wide screens): "on this page" with scroll-spy ---------- */
   const rail = document.getElementById("rail");
   let spy = null;
-  function buildRail(kind) {
+  function buildRail(kind, noteKey) {
     if (spy) { spy.disconnect(); spy = null; }
+    if (rail.querySelector(".console")) return;  // lab pages: the console owns the rail
     rail.innerHTML = "";
+    document.querySelector(".layout").classList.remove("has-console");
     let heads = [...app.querySelectorAll(".md h2")];
     if (heads.length < 3) heads = [...app.querySelectorAll(".md h2, .md h3")];
     heads = heads.filter((h) => !h.closest("details:not(.toc)"));
-    const on = !!kind && heads.length >= 2;
+    const on = !!kind && (heads.length >= 2 || !!noteKey);
     document.querySelector(".layout").classList.toggle("has-rail", on);
-    if (!on) return;
+    placeNotes(on);
+    if (!on || heads.length < 2) return;
     const used = {};
     heads.forEach((h) => { if (!h.id) { let id = "h-" + slugId(h.textContent); used[id] = (used[id] || 0) + 1; if (used[id] > 1) id += "-" + used[id]; h.id = id; } });
     const box = el(`<div class="rail-box"><div class="rail-label">On this page</div><nav class="rail-toc"></nav></div>`);
@@ -455,7 +937,7 @@
     const top = el(`<a href="#" class="rail-top">↑ Back to top</a>`);
     top.onclick = (e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: "smooth" }); };
     box.appendChild(top);
-    rail.appendChild(box);
+    rail.insertBefore(box, rail.firstChild);
     let current = null;
     const visible = new Set();
     spy = new IntersectionObserver((entries) => {

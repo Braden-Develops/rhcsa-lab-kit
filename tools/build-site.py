@@ -138,6 +138,7 @@ def main():
         "objectives": objectives(),
         "labs": labs(),
         "lectures": lectures(),
+        "agent": read(ROOT / "agent" / "README.md"),
     }
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text("window.KIT = " + json.dumps(data, ensure_ascii=False, indent=1) + ";\n", encoding="utf-8")
