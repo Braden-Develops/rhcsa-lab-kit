@@ -452,7 +452,7 @@
           <button class="btn" data-a="stop" title="./lab stop ${l.id}">Stop</button>
         </div>
       </div>
-      <div class="con-tabs" role="tablist"><button data-t="term" class="on">Terminal</button><button data-t="out">Output <span class="con-score" id="cScore"></span></button><button data-t="notes">Notes</button><button data-t="hist">History</button></div>
+      <div class="con-tabs" role="tablist"><button data-t="term" class="on">Terminal</button><button data-t="out">Output <span class="con-score" id="cScore"></span></button><button data-t="notes">Notes</button><button data-t="hist">History</button><button data-t="ask">Ask Claude</button></div>
       <div class="con-pane" data-p="term"><div class="term-wrap"><div class="term" id="cTerm"></div>
         <div class="term-cover" id="cCover">${ready
           ? `<button class="btn primary" id="cOpen">Open root shell</button><p>Runs <code>./lab shell ${l.id}</code> on your lab host${l.runtime === "vm" ? " (the VM, as root)" : " (inside the lab container)"}. Start the lab first.</p>`
@@ -460,9 +460,11 @@
       <div class="con-pane" data-p="out" hidden><pre class="job-out" id="cOut">Output from Start, Check and Reset appears here.</pre></div>
       <div class="con-pane" data-p="notes" hidden></div>
       <div class="con-pane" data-p="hist" hidden></div>
+      <div class="con-pane" data-p="ask" hidden></div>
     </section>`);
     con = { l, root };
     root.querySelector('[data-p="notes"]').appendChild(notesEditor("lab-" + l.id, "Lab " + l.id + ": " + shortTitle(l.title)));
+    root.querySelector('[data-p="ask"]').appendChild(askPane(l));
     const tabs = root.querySelectorAll(".con-tabs button");
     const showTab = (t) => {
       tabs.forEach((b) => b.classList.toggle("on", b.dataset.t === t));
@@ -546,12 +548,62 @@
     const badge = con.root.querySelector("#cScore");
     if (!m) { badge.textContent = "?"; badge.className = "con-score"; return; }
     const p = +m[1], n = +m[2];
+    con.lastCheck = { t: Date.now(), text };
     const fails = (text.match(/^\s*FAIL .*$/gm) || []).map((x) => x.trim().replace(/^FAIL\s+/, ""));
     (state.history[l.id] = state.history[l.id] || []).push({ t: Date.now(), p, n, fails: fails.slice(0, 30) });
     if (state.history[l.id].length > 50) state.history[l.id].shift();
     save();
     badge.textContent = `${p}/${n}`; badge.className = "con-score " + (p === n ? "ok" : "bad");
     if (p === n && state.labs[l.id] !== "done") setLabStatus(l.id, "done");
+  }
+
+  /* "Ask Claude": builds a paste-ready help request (lab, question, grader result, recent terminal). Never includes the agent URL or token. */
+  function termTail(n) {
+    if (!con || !con.term) return "";
+    const b = con.term.buffer.active, lines = [];
+    for (let i = Math.max(0, b.length - 400); i < b.length; i++) lines.push(b.getLine(i).translateToString(true));
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    return lines.slice(-n).join(NL);
+  }
+  const NL = "\n";
+  function helpRequest(l, mode, q, withTerm) {
+    const h = (state.history[l.id] || []).slice(-1)[0];
+    const lc = con && con.lastCheck;
+    const ask = mode === "grade"
+      ? "Please grade my work: run the check yourself, look at what I actually did, and tell me what's wrong and why. Full explanations are fine."
+      : "Please give me hints, not the solution. Look at what I actually did and point me in the right direction. Only show the answer if I ask.";
+    let up = "unknown";
+    if (hostStatus && !hostStatus.error) up = l.runtime === "vm" ? (hostStatus.vm === "running" ? `VM running${hostStatus.vm_lab ? " (lab " + hostStatus.vm_lab + ")" : ""}` : "VM not running") : (hostStatus.containers.includes(l.id) ? "running" : "not running");
+    const parts = [
+      `I need help with RHCSA lab ${l.id}: ${shortTitle(l.title)}.`,
+      `Lab host: ${(hostStatus && hostStatus.host) || "my lab host"}, kit at ~/rhcsa-lab-kit (use ./lab check ${l.id} and ./lab shell ${l.id}). Lab is ${up}.`,
+      "", ask, "", "My question: " + (q.trim() || "(none, just see where I am)"),
+    ];
+    if (h) parts.push("", `Last grade (${new Date(h.t).toLocaleString()}): ${h.p}/${h.n}` + (h.fails && h.fails.length ? NL + "Failing checks:" + NL + h.fails.map((f) => "- " + f).join(NL) : ""));
+    if (lc) parts.push("", "Last check output:", "```", lc.text.trim().split(NL).slice(-60).join(NL), "```");
+    const tt = withTerm ? termTail(40) : "";
+    if (tt) parts.push("", "My recent terminal:", "```", tt, "```");
+    return parts.join(NL);
+  }
+  function askPane(l) {
+    const box = el(`<div class="ask">
+      <p class="muted">Copies everything Claude needs (lab, your question, latest grade, recent terminal) so you can paste it into your Claude chat. Claude can then log into your lab host to look.</p>
+      <div class="ask-mode" role="radiogroup"><label><input type="radio" name="askMode" value="hint" checked> Hints only</label><label><input type="radio" name="askMode" value="grade"> Grade me and explain</label></div>
+      <textarea spellcheck="true" placeholder="What are you stuck on? (optional)"></textarea>
+      <label class="ask-term"><input type="checkbox" checked> Include last 40 lines of my terminal</label>
+      <div class="ask-actions"><button class="btn primary" type="button">Copy for Claude</button><button class="link-btn" type="button">Preview</button><span class="ask-st muted"></span></div>
+      <pre class="ask-prev" hidden></pre></div>`);
+    const ta = box.querySelector("textarea"), [copy, prevBtn] = box.querySelectorAll(".ask-actions button"), st = box.querySelector(".ask-st"), pv = box.querySelector(".ask-prev"), term = box.querySelector(".ask-term input");
+    const build = () => helpRequest(l, box.querySelector('input[name="askMode"]:checked').value, ta.value, term.checked);
+    prevBtn.onclick = () => { pv.hidden = !pv.hidden; prevBtn.textContent = pv.hidden ? "Preview" : "Hide preview"; if (!pv.hidden) pv.textContent = build(); };
+    box.addEventListener("input", () => { if (!pv.hidden) pv.textContent = build(); });
+    copy.onclick = async () => {
+      const text = build();
+      try { await navigator.clipboard.writeText(text); st.textContent = "Copied. Paste it into Claude."; }
+      catch (e) { pv.hidden = false; pv.textContent = text; prevBtn.textContent = "Hide preview"; const r = document.createRange(); r.selectNodeContents(pv); getSelection().removeAllRanges(); getSelection().addRange(r); st.textContent = "Couldn't copy automatically. It's selected below: press Ctrl+C."; }
+      setTimeout(() => (st.textContent = ""), 4000);
+    };
+    return box;
   }
 
   function renderHistory(l, box) {
