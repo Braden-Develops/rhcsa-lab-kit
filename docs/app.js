@@ -37,6 +37,9 @@
     const wrap = document.createElement("div");
     wrap.className = "md";
     wrap.innerHTML = marked.parse(src || "");
+    // Stable heading ids (from the heading text) so a page can be linked, and refreshed, at a section.
+    const usedIds = {};
+    wrap.querySelectorAll("h2, h3, h4").forEach((h) => { let id = "h-" + slugId(h.textContent); usedIds[id] = (usedIds[id] || 0) + 1; if (usedIds[id] > 1) id += "-" + usedIds[id]; h.id = id; });
     wrap.querySelectorAll("table").forEach((t) => {
       const w = document.createElement("div"); w.className = "table-wrap"; t.replaceWith(w); w.appendChild(t);
     });
@@ -137,7 +140,7 @@
   function setPin(key, tag) {
     if (tag) state.pins[key] = { t: (state.pins[key] && state.pins[key].t) || Date.now(), tag };
     else delete state.pins[key];
-    save(); renderSidebar(location.hash || "#/");
+    save(); renderSidebar(curKey);
   }
   function pinBar(key) {
     const box = el(`<div class="pin-bar"></div>`);
@@ -354,7 +357,7 @@
       app.appendChild(objList(g));
     }
     const mark = el(`<div class="btn-row"><button class="btn${state.read[l.num] ? "" : " primary"}" id="markRead">${state.read[l.num] ? "✓ Read (click to undo)" : "Mark lecture as read"}</button></div>`);
-    mark.querySelector("button").onclick = () => { if (state.read[l.num]) delete state.read[l.num]; else state.read[l.num] = true; save(); pageLecture(num); renderSidebar(location.hash); };
+    mark.querySelector("button").onclick = () => { if (state.read[l.num]) delete state.read[l.num]; else state.read[l.num] = true; save(); pageLecture(num); renderSidebar(curKey); };
     app.appendChild(mark);
     attachNotes("lecture-" + l.num, "Lecture " + l.num + ": " + l.title);
     app.appendChild(pager(i > 0 && lectures[i - 1], lectures[i + 1], (x) => "#/lecture/" + x.num, (x) => "Lecture " + x.num + " · " + x.title));
@@ -366,7 +369,7 @@
       const li = el(`<li class="obj${state.obj[o.id] ? " checked" : ""}"><input type="checkbox" ${state.obj[o.id] ? "checked" : ""} aria-label="${esc(o.id)}"><span class="oid">${esc(o.id)}</span>
         <span class="otext"><span>${esc(o.text)}</span><span class="olabs">Practice: ${linkLabs(o.labs)}</span></span></li>`);
       const cb = li.querySelector("input");
-      const toggle = (v) => { state.obj[o.id] = v; if (!v) delete state.obj[o.id]; save(); li.classList.toggle("checked", v); cb.checked = v; renderSidebar(location.hash || "#/"); updateCount(); };
+      const toggle = (v) => { state.obj[o.id] = v; if (!v) delete state.obj[o.id]; save(); li.classList.toggle("checked", v); cb.checked = v; renderSidebar(curKey); updateCount(); };
       cb.onclick = (e) => { e.stopPropagation(); toggle(cb.checked); };
       li.onclick = (e) => { if (e.target.closest("a")) return; toggle(!cb.checked); };
       ul.appendChild(li);
@@ -457,7 +460,7 @@
     app.querySelectorAll("#status button").forEach((b) => (b.onclick = () => {
       state.labs[l.id] = b.dataset.v; save();
       app.querySelectorAll("#status button").forEach((x) => x.classList.toggle("on", x === b));
-      renderSidebar(location.hash);
+      renderSidebar(curKey);
     }));
     // timer: a stopwatch for timed redo runs; best time kept per lab
     const clock = document.getElementById("clock"), best = document.getElementById("best");
@@ -668,7 +671,7 @@
   function setLabStatus(id, v) {
     state.labs[id] = v; save();
     app.querySelectorAll("#status button").forEach((x) => x.classList.toggle("on", x.dataset.v === v));
-    renderSidebar(location.hash);
+    renderSidebar(curKey);
   }
 
   function gradeResult(l, text) {
@@ -1060,15 +1063,65 @@
   document.getElementById("menuBtn").onclick = () => document.body.classList.toggle("nav-open");
   document.getElementById("scrim").onclick = () => document.body.classList.remove("nav-open");
 
-  /* ---------- router ---------- */
+  /* ---------- router ----------
+     Page routes may carry a trailing section: #/lecture/3/lec-3-2-..., #/guide/<slug>/h-..., #/lab/04/h-...,
+     #/setup/h-... . While you read, the hash follows the heading you are in (replaceState, so no history
+     entries pile up), and a refresh or a shared link lands back on that section. */
+  const SECTION_PAGES = { lecture: 1, guide: 1, lab: 1, setup: 0 };  // value: whether the page takes an item argument first
+  let curKey = "#/", firstRoute = true;
+  history.scrollRestoration = "manual";
+  function splitHash(h) {
+    const [, page, rest = ""] = h.match(/^#\/([^/]*)\/?(.*)$/) || [];
+    if (!(page in SECTION_PAGES)) return { page, arg: rest, sec: "", base: h };
+    let arg = rest, sec = "";
+    if (SECTION_PAGES[page]) { const i = rest.indexOf("/"); if (i >= 0) { arg = rest.slice(0, i); sec = rest.slice(i + 1); } }
+    else { arg = ""; sec = rest; }
+    return { page, arg, sec: decodeURIComponent(sec), base: "#/" + page + (arg ? "/" + arg : "") };
+  }
+  function sectionHeads() {
+    return [...app.querySelectorAll(".md h2[id], .md h3[id]")].filter((h) => h.offsetParent !== null && !h.closest("details:not([open])"));
+  }
+  function goToSection(id) {
+    const t = id && document.getElementById(id);
+    if (!t || !app.contains(t)) return false;
+    t.scrollIntoView({ block: "start" });
+    return true;
+  }
+  let hashT = 0, landing = null;
+  // After a refresh, keep re-landing on the section while late layout (fonts, highlighting, the rail) settles,
+  // and leave the hash alone meanwhile. Any wheel, touch, key or click by the reader ends that at once.
+  function landOn(id) {
+    landing = id;
+    const again = () => { if (landing === id) goToSection(id); };
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => requestAnimationFrame(again));
+    [100, 300, 700].forEach((ms) => setTimeout(again, ms));
+    setTimeout(() => { if (landing === id) landing = null; }, 1000);
+  }
+  ["wheel", "touchstart", "keydown", "mousedown"].forEach((ev) => window.addEventListener(ev, () => { landing = null; }, { passive: true }));
+  function syncHashToScroll() {
+    hashT = 0;
+    if (landing) return;
+    // Pages with no headings to tag still come back to the same spot on refresh (this tab only).
+    try { sessionStorage.setItem("rhcsa-scroll", JSON.stringify({ key: curKey, y: Math.round(scrollY) })); } catch (e) {}
+    const { page, base } = splitHash(location.hash || "#/");
+    if (!(page in SECTION_PAGES) || base !== curKey) return;
+    let cur = null;
+    for (const h of sectionHeads()) { if (h.getBoundingClientRect().top <= 90) cur = h; else break; }
+    const want = cur ? base + "/" + cur.id : base;
+    if (want !== location.hash) history.replaceState(history.state, "", want);
+  }
+  window.addEventListener("scroll", () => { if (!hashT) hashT = setTimeout(syncHashToScroll, 150); }, { passive: true });
+
   function route() {
+    const sp = splitHash(location.hash || "#/");
+    if (sp.page in SECTION_PAGES && sp.base === curKey && app.childElementCount) { if (!goToSection(sp.sec)) window.scrollTo(0, 0); return; }
     if (timer) { clearInterval(timer); timer = null; }
     teardownConsole();
     notesEl = null; currentNoteKey = null;
-    const h = location.hash || "#/";
-    const [, page, arg] = h.match(/^#\/([^/]*)\/?(.*)$/) || [];
+    const { page, arg, sec, base: h } = sp;
     document.body.classList.remove("nav-open");
     let navKey = h;
+    curKey = h;
     if (page === "search") { const q = decodeURIComponent(arg); if (searchBox.value.trim() !== q) searchBox.value = q; pageSearch(q); }
     else if (page === "lecture" && arg) pageLecture(arg);
     else if (page === "lecture" || page === "lectures") pageLectureIndex();
@@ -1081,13 +1134,19 @@
     else if (page === "host") pageHost();
     else if (page === "notes") pageNotes();
     else if (page === "review") pageReview();
-    else { pageHome(); navKey = "#/"; }
+    else { pageHome(); navKey = curKey = "#/"; }
     renderSidebar(navKey);
     const t = app.querySelector("h1");
     document.title = (t && navKey !== "#/" ? t.textContent + " · " : "") + "RHCSA Study Kit";
-    if (page !== "search") window.scrollTo(0, 0);
     const a = sidebar.querySelector(".active"); if (a) a.scrollIntoView({ block: "nearest" });
     buildRail(["lecture", "guide"].includes(page) && arg ? page : null, currentNoteKey);
+    landing = null;
+    let saved = null;
+    if (firstRoute) { try { saved = JSON.parse(sessionStorage.getItem("rhcsa-scroll")); } catch (e) {} }
+    firstRoute = false;
+    if (sec && goToSection(sec)) landOn(sec);
+    else if (saved && saved.key === h && saved.y > 0) { window.scrollTo(0, saved.y); setTimeout(() => { if (!scrollY) window.scrollTo(0, saved.y); }, 300); }
+    else if (page !== "search") window.scrollTo(0, 0);
   }
 
   /* ---------- right rail (wide screens): "on this page" with scroll-spy ---------- */

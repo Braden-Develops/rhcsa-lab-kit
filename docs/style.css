@@ -223,7 +223,6 @@ var { font: 600 12.5px var(--mono); font-style: normal; padding: 0 6px; border: 
 .toc { margin: 16px 0 24px; }
 .toc ol { margin: 0; padding-left: 22px; columns: 2 280px; column-gap: 28px; }
 .toc li { margin: 2px 0; break-inside: avoid; font-size: 14px; }
-.md h2[id^="lec-"] { scroll-margin-top: 72px; }
 
 /* right rail + wide (16:9) screens */
 .rail { display: none; }
