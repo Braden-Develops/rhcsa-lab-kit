@@ -20,7 +20,7 @@
    a. *Broken:* `httpd` won't start. Fix it, start it, and make it start at boot.
       `curl http://localhost/` must return the lab page.
    b. Check the status of `crond`, then **stop** it (leave it enabled). Write the main PID it had while running
-      (from `systemctl status`) into `/root/crond.pid` before you stop it.
-7. **Secure file transfer.** Using `scp`/`sftp` as user `sally` (password `sally-pass`) on host `localhost`:
+      into `/root/crond.pid` before you stop it.
+7. **Secure file transfer.** Over SSH-based file transfer, as user `sally` (password `sally-pass`) on host `localhost`:
    a. copy `/root/transfer/report.txt` into sally's home directory,
    b. download `/home/sally/outbox/data.csv` to `/root/data.csv`.

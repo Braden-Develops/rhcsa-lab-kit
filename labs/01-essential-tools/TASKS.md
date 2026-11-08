@@ -4,8 +4,8 @@ Work as root (`./lab shell 01`). Grade any time with `labctl check`.
 
 1. **grep / regex.** Write every line of `/srv/data/app.log` that *starts with* `2026-11` and contains the
    word `ERROR` into `/root/nov-errors.txt`, keeping the original order. Nothing else may be in the file.
-2. **Redirection.** Run `find /srv /opt -user harry` so that the list of paths goes to `/root/harry-files.txt`
-   and any error messages go to `/root/find-errors.txt`.
+2. **Redirection.** Search `/srv` and `/opt` for everything owned by user `harry`. In a single command, the list
+   of paths must go to `/root/harry-files.txt` and any error messages to `/root/find-errors.txt`.
 3. **Archives.**
    a. Create `/root/ssh-backup.tar.bz2`, a bzip2-compressed tar archive of `/etc/ssh`.
    b. Extract `/srv/data/payroll.tar.gz` into `/opt/restore` (so `/opt/restore/payroll/q1.csv` exists).
@@ -21,16 +21,17 @@ Work as root (`./lab shell 01`). Grade any time with `labctl check`.
 6. **SSH.** Log in over SSH to `localhost` as `sally` (password `sally-pass`), read `~/flag.txt`,
    and save its contents into `/root/flag.txt`. (Yes, root could cheat. Don't.)
 7. **Documentation.**
-   a. Using `man -k` / `apropos`, find the man page section that documents the *file format* of `/etc/passwd`.
-      Write just the section number into `/root/man-section.txt`.
-   b. Using `info grep` (not man), find grep's **long** option that prints only a count of matching lines.
-      Write it (e.g. `--something`) into `/root/info-answer.txt`.
-   c. List every documentation file the `tar` package installed (they live under `/usr/share/doc` and
-      `/usr/share/man`, and rpm can tell you which they are) into `/root/tar-docs.txt`, one path per line.
-8. **Log in and switch users.** From a root shell, become `student` (`su - student`), and from there switch to
-   `harry` with `su - harry` (password `harry-pass`). As harry, create `~/whoami.txt` containing the output of
-   `whoami`. (Console logins on a text-mode tty of a multi-user target are drilled in VM lab 05.)
-9. **Create and edit text files.** Using `vim` (or nano), edit `/srv/data/app.conf` so that: the port is `9090`,
+   a. Without searching the web, find which man page section documents the *file format* of `/etc/passwd`
+      (not the command). Write just the section number into `/root/man-section.txt`.
+   b. Using grep's **info** documentation (not its man page), find grep's **long** option that prints only a
+      count of matching lines. Write it (e.g. `--something`) into `/root/info-answer.txt`.
+   c. Write the path of every documentation file the `tar` package installed into `/root/tar-docs.txt`,
+      one path per line.
+8. **Log in and switch users.** Starting from root, switch to user `student` with a full login environment.
+   From that session, switch to user `harry` (password `harry-pass`), again with a full login environment.
+   As harry, create `~/whoami.txt` containing the username the system reports for your current session.
+   (Console logins on a text-mode tty of a multi-user target are drilled in VM lab 05.)
+9. **Create and edit text files.** Using a text editor, edit `/srv/data/app.conf` so that: the port is `9090`,
    the `debug=true` line is gone, and a new last line reads `owner=ops`. Leave the other lines unchanged.
    Then create a new file `/root/motd.txt` whose only line is `Authorized use only`.
 10. **Create, delete, copy and move.**

@@ -14,10 +14,10 @@ start the VM with `LAB_GUI=1` for VirtualBox (see README). The root password is 
 4. Make the GRUB menu wait **10 seconds** by default (persistently).
 5. Make the system boot into **multi-user.target** by default.
 6. Boot **once** into **rescue.target** by editing the kernel line at the GRUB menu, log in as root,
-   and from there continue to the normal target (`systemctl default`).
-7. **Shut down normally**: power the VM off with `systemctl poweroff`, then start it again
+   and from there continue on to the system's default target without rebooting.
+7. **Shut down normally**: power the VM off cleanly from inside the OS, then start it again
    (`vagrant up`, virt-manager or VirtualBox).
 8. **Log in on a text console of the multi-user target**: at the VM console switch to the second virtual terminal
-   (Ctrl+Alt+F2; in virt-manager use *Send Key*), log in as `student` (password `student`), then use `su -` to
-   become root (password `redhat`). Log out again.
+   (Ctrl+Alt+F2; in virt-manager use *Send Key*), log in as `student` (password `student`), then become root
+   (password `redhat`) with a full login environment. Log out again.
 9. Finally reboot normally (`systemctl reboot`), log in, and run `sudo labctl check`.
