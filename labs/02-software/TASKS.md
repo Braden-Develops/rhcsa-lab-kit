@@ -6,14 +6,15 @@
    **update** it from the repository to the newest version (1.1).
 3. Create a new repository definition named `extras` (file `/etc/yum.repos.d/extras.repo`) for the repository in
    `/srv/repos/extras`, with GPG checking off, and install `labextra` from it.
-4. Install the package file `/root/rpms/hello-lab-2.0-1.noarch.rpm` from the local file system with `dnf`.
+4. Install the package file `/root/rpms/hello-lab-2.0-1.noarch.rpm` from the local file system, with its
+   dependencies resolved automatically.
 5. Remove the package `tree`.
 6. Find out which package provides the file `/usr/bin/crontab` and write the package **name** (no version)
    into `/root/crontab-pkg.txt`.
 7. **Flatpak repositories.** Add the Flathub remote **system-wide** under the name `flathub`
    (`https://dl.flathub.org/repo/flathub.flatpakrepo`).
-8. **Flatpak packages.** Install the app `org.gnome.Calculator` from `flathub` (system-wide), confirm it with
-   `flatpak list --app`, then **uninstall** it. The grader reads `flatpak history`.
+8. **Flatpak packages.** Install the app `org.gnome.Calculator` from `flathub` (system-wide), confirm it is
+   installed, then **uninstall** it. The grader reads Flatpak's history.
    Heads-up: the first install pulls the GNOME runtime (around 1 GB). Apps can't *run* in this container,
    but installing and removing works. If your container engine blocks it, do tasks 7 and 8 in the lab VM instead.
 9. **Red Hat CDN (read only, no grader).** On real RHEL, software comes from the Red Hat CDN after

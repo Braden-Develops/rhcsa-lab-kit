@@ -1,7 +1,7 @@
 # Lab 06: Configure local storage
 
 Disks for this lab: **DISK1 = {{DISK1}}**, **DISK2 = {{DISK2}}**, **DISK3 = {{DISK3}}**. Don't touch the system disk.
-Mount everything persistently; test with `mount -a` / `swapon -a` and `findmnt --verify` **before** you reboot.
+Mount everything persistently, and verify your persistent configuration **before** you reboot (a bad entry can stop the VM from booting).
 
 1. **Partitions.** Give {{DISK1}} a **GPT** label and create:
    - partition 1: **512 MiB**, used as **swap**, enabled at boot **by UUID** (keep any existing swap too)
