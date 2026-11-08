@@ -11,7 +11,7 @@
   const STORE_KEY = "rhcsa-kit-v1";
   let state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, notes: {}, history: {}, theme: null };
   try { Object.assign(state, JSON.parse(localStorage.getItem(STORE_KEY) || "{}")); } catch (e) {}
-  state.read = state.read || {}; state.notes = state.notes || {}; state.history = state.history || {};
+  state.read = state.read || {}; state.notes = state.notes || {}; state.history = state.history || {}; state.pins = state.pins || {};
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
 
   /* ---------- helpers ---------- */
@@ -88,6 +88,7 @@
       <div class="mini-bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div>
       <a class="nav-link${active("#/host")}" href="#/host"><span class="nav-text">Lab host</span><span class="dot ${hostDotClass()}" id="hostDot" title="${esc(hostDotTitle())}"></span></a>
       <a class="nav-link${active("#/notes")}" href="#/notes"><span class="nav-text">My notes</span><span class="nav-num">${Object.values(state.notes).filter((n) => n.text.trim()).length || ""}</span></a>
+      <a class="nav-link${active("#/review")}" href="#/review"><span class="nav-text">Pinned &amp; tests</span><span class="nav-num">${Object.keys(state.pins).filter((k) => pinInfo(k)).length || ""}</span></a>
     </div>
     `;
     if (lectures.length) {
@@ -108,6 +109,129 @@
     sidebar.innerHTML = h;
   }
   function shortTitle(t) { return t.split(/[:(]/)[0].trim(); }
+
+  /* ---------- pins: mark guide sections, lectures (or a lecture's subsections) and labs for review or a test ---------- */
+  const PIN_TAGS = { review: "Review", test: "Test me", both: "Review + test" };
+  const objGroup = (num) => KIT.objectives.groups.find((g) => g.num === num);
+  const labIdsIn = (text) => [...new Set((String(text).match(/\b(0\d|1[01])\b(?=\s*tasks?\b)/g) || []))];
+  function pinInfo(key) {
+    const [kind, rest] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+    if (kind === "guide") {
+      const s = sections.find((x) => x.slug === rest); if (!s) return null;
+      const g = s.num && objGroup(s.num);
+      return { kind: "Study guide", title: (s.num ? s.num + ". " : "") + s.title, href: "#/guide/" + s.slug, objs: g ? g.items : [], labs: s.labs || [] };
+    }
+    if (kind === "lecture") {
+      const [num, sub] = rest.split("#"); const l = lectureByNum(num); if (!l) return null;
+      const g = objGroup(l.num), sec = numbered.find((s) => s.num === l.num);
+      let subTitle = "";
+      if (sub) { const m = l.body.split("\n").find((line) => /^## /.test(line) && "lec-" + slugId(line.slice(3).replace(/[*`_]/g, "")) === sub); if (!m) return null; subTitle = m.slice(3).replace(/[*`]/g, ""); }
+      return { kind: sub ? "Lecture subsection" : "Lecture", title: "Lecture " + l.num + ": " + l.title + (subTitle ? " › " + subTitle : ""), href: "#/lecture/" + l.num, objs: sub ? allObjectives.filter((o) => subTitle.startsWith(o.id + " ")) : g ? g.items : [], labs: sec ? sec.labs : [], sub: subTitle };
+    }
+    if (kind === "lab") {
+      const l = labById(rest); if (!l) return null;
+      return { kind: "Lab", title: "Lab " + l.id + ": " + shortTitle(l.title), href: "#/lab/" + l.id, objs: allObjectives.filter((o) => labIdsIn(o.labs).includes(l.id)), labs: [l.id] };
+    }
+    return null;
+  }
+  function setPin(key, tag) {
+    if (tag) state.pins[key] = { t: (state.pins[key] && state.pins[key].t) || Date.now(), tag };
+    else delete state.pins[key];
+    save(); renderSidebar(location.hash || "#/");
+  }
+  function pinBar(key) {
+    const box = el(`<div class="pin-bar"></div>`);
+    const draw = () => {
+      const p = state.pins[key];
+      box.innerHTML = p
+        ? `<span class="pin-on">📌 Pinned</span><select aria-label="Pin tag">${Object.entries(PIN_TAGS).map(([v, t]) => `<option value="${v}"${p.tag === v ? " selected" : ""}>${t}</option>`).join("")}</select><button class="link-btn" type="button">Unpin</button><a href="#/review">See pinned</a>`
+        : `<button class="btn" type="button" title="Pin this for review or to generate a test from">📌 Pin for review / test</button>`;
+      if (p) { box.querySelector("select").onchange = (e) => setPin(key, e.target.value); box.querySelector(".link-btn").onclick = () => { setPin(key, null); draw(); }; }
+      else box.querySelector("button").onclick = () => { setPin(key, "review"); draw(); };
+    };
+    draw();
+    return box;
+  }
+  function subPinBtn(key) {
+    const b = el(`<button class="sub-pin" type="button"></button>`);
+    const draw = () => { const on = !!state.pins[key]; b.classList.toggle("on", on); b.textContent = on ? "📌" : "📍"; b.title = on ? "Pinned. Click to unpin" : "Pin this subsection for review / test"; };
+    b.onclick = (e) => { e.stopPropagation(); setPin(key, state.pins[key] ? null : "review"); draw(); };
+    draw();
+    return b;
+  }
+
+  function pageReview() {
+    const keys = Object.keys(state.pins).filter((k) => pinInfo(k)).sort((a, b) => state.pins[b].t - state.pins[a].t);
+    app.innerHTML = `<div class="eyebrow">Review</div><h1>Pinned &amp; tests</h1>
+      <p class="lede">Pin a lecture, a lecture subsection, a study-guide section or a lab with the 📌 button on its page. Tag each one <b>Review</b> or <b>Test me</b>, then copy a test request for Claude below. Claude writes the test, waits for your answers, and grades them. For hands-on questions it can build the scenario on your lab host.</p>`;
+    if (!keys.length) { app.appendChild(el(`<div class="card empty">Nothing pinned yet. Open any lecture, guide section or lab and press <b>📌 Pin for review / test</b>.</div>`)); return; }
+    const list = el(`<div class="pin-list"></div>`);
+    for (const k of keys) {
+      const info = pinInfo(k), p = state.pins[k];
+      const row = el(`<div class="card pin-row"><label class="pin-pick"><input type="checkbox" data-k="${esc(k)}" ${p.tag !== "review" ? "checked" : ""}></label>
+        <div class="pin-main"><a href="${info.href}">${esc(info.title)}</a><div class="s">${esc(info.kind)}${info.objs.length ? " · objectives " + esc(info.objs.map((o) => o.id).join(", ")) : ""}</div></div>
+        <select aria-label="Tag">${Object.entries(PIN_TAGS).map(([v, t]) => `<option value="${v}"${p.tag === v ? " selected" : ""}>${t}</option>`).join("")}</select>
+        <button class="link-btn" type="button">Unpin</button></div>`);
+      row.querySelector("select").onchange = (e) => { setPin(k, e.target.value); row.querySelector("input").checked = e.target.value !== "review"; };
+      row.querySelector(".link-btn").onclick = () => { setPin(k, null); pageReview(); };
+      list.appendChild(row);
+    }
+    app.appendChild(list);
+    const gen = el(`<section class="card test-gen"><h2>Generate a test</h2>
+      <p class="muted">Ticked items above go into the test. Items tagged <b>Test me</b> are ticked by default.</p>
+      <div class="test-opts">
+        <label><span>Questions</span><select id="tN"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></label>
+        <label><span>Style</span><select id="tStyle"><option value="mixed">Mixed: concepts and hands-on</option><option value="mc">Multiple choice</option><option value="short">Short answer: commands and concepts</option><option value="hands">Hands-on tasks on my lab host</option><option value="exam">Mini EX200: timed exam-style tasks</option></select></label>
+        <label><span>Difficulty</span><select id="tDiff"><option value="exam">Exam level</option><option value="easier">Warm-up</option><option value="harder">Harder than the exam</option></select></label>
+      </div>
+      <label class="ask-term"><input type="checkbox" id="tWeak" checked> Focus on objectives I haven't checked off yet</label>
+      <div class="ask-actions"><button class="btn primary" type="button" id="tCopy">Copy test request for Claude</button><button class="link-btn" type="button" id="tPrev">Preview</button><span class="ask-st muted" id="tSt"></span></div>
+      <pre class="ask-prev" id="tOut" hidden></pre></section>`);
+    app.appendChild(gen);
+    const build = () => {
+      const picked = [...list.querySelectorAll("input[data-k]:checked")].map((c) => c.dataset.k);
+      if (!picked.length) return "";
+      const n = gen.querySelector("#tN").value, style = gen.querySelector("#tStyle").value, diff = gen.querySelector("#tDiff").value, weak = gen.querySelector("#tWeak").checked;
+      const styleText = {
+        mixed: "a mix of concept questions and short hands-on tasks",
+        mc: "multiple-choice questions (4 options each, one correct)",
+        short: "short-answer questions where I type the command or explain the concept",
+        hands: "hands-on tasks I do on my lab host. Set up whatever each task needs in a lab container or the lab VM, then grade by inspecting the real system",
+        exam: "EX200-style tasks: state only the required end state, never the command, and give me a time limit for the whole set. Set them up on my lab host and grade the final state, after a reboot where it matters",
+      }[style];
+      const diffText = { exam: "at real EX200 difficulty", easier: "as a warm-up, a bit easier than the exam", harder: "harder than the real exam, with edge cases and traps" }[diff];
+      const lines = [
+        `Make me an RHCSA (EX200, RHEL 10) practice test: ${n} questions, ${styleText}, ${diffText}.`,
+        "Don't show any answers yet. Number the questions, then wait for my answers. When I send them, grade each one, explain what I got wrong, and give me a score.",
+        hostStatus && !hostStatus.error && hostStatus.host ? `My lab host is ${hostStatus.host} (kit at ~/rhcsa-lab-kit).` : "",
+        "", "Cover only these pinned topics:",
+      ];
+      const objIds = new Set();
+      for (const k of picked) {
+        const info = pinInfo(k);
+        lines.push(`- ${info.kind}: ${info.title}`);
+        for (const o of info.objs) { objIds.add(o.id); lines.push(`    - ${o.id} ${o.text}${state.obj[o.id] ? " (I've checked this off)" : ""}`); }
+      }
+      if (weak) {
+        const open = allObjectives.filter((o) => objIds.has(o.id) && !state.obj[o.id]).map((o) => o.id);
+        if (open.length) lines.push("", "Weight the test toward objectives I haven't checked off yet: " + open.join(", ") + ".");
+      }
+      const hist = [...new Set(picked.flatMap((k) => pinInfo(k).labs))].map((id) => { const h = (state.history[id] || []).slice(-1)[0]; return h && h.fails && h.fails.length ? `Lab ${id} (last ${h.p}/${h.n}): ` + h.fails.slice(0, 8).join("; ") : ""; }).filter(Boolean);
+      if (hist.length) lines.push("", "Checks I failed last time in related labs:", ...hist.map((x) => "- " + x));
+      return lines.filter((x, i, a) => x !== "" || a[i - 1] !== "").join("\n").trim();
+    };
+    const out = gen.querySelector("#tOut"), st = gen.querySelector("#tSt"), prev = gen.querySelector("#tPrev");
+    const refresh = () => { if (!out.hidden) out.textContent = build() || "Tick at least one pinned item."; };
+    prev.onclick = () => { out.hidden = !out.hidden; prev.textContent = out.hidden ? "Preview" : "Hide preview"; refresh(); };
+    list.addEventListener("change", refresh); gen.addEventListener("change", refresh);
+    gen.querySelector("#tCopy").onclick = async () => {
+      const text = build();
+      if (!text) { st.textContent = "Tick at least one pinned item."; return; }
+      try { await navigator.clipboard.writeText(text); st.textContent = "Copied. Paste it into Claude."; }
+      catch (e) { out.hidden = false; out.textContent = text; prev.textContent = "Hide preview"; const r = document.createRange(); r.selectNodeContents(out); getSelection().removeAllRanges(); getSelection().addRange(r); st.textContent = "Couldn't copy automatically. It's selected below: press Ctrl+C."; }
+      setTimeout(() => (st.textContent = ""), 4000);
+    };
+  }
 
   /* ---------- pages ---------- */
   function pageHome() {
@@ -147,7 +271,7 @@
     const how = KIT.readme.split(/^## /m).find((p) => /^Suggested study plan/.test(p));
     if (how) app.appendChild(md(how.replace(/^.*\n/, "")));
     app.appendChild(el(`<div class="footer">Progress lives in this browser only. <a href="#" id="resetAll">Reset all progress</a></div>`));
-    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses, grader history and best times? (Your notes are kept.)")) { state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, notes: state.notes, history: {}, theme: state.theme }; save(); route(); } };
+    document.getElementById("resetAll").onclick = (e) => { e.preventDefault(); if (confirm("Clear all checkboxes, lab statuses, grader history and best times? (Your notes are kept.)")) { state = { obj: {}, labs: {}, best: {}, checks: {}, read: {}, notes: state.notes, history: {}, theme: state.theme, pins: state.pins }; save(); route(); } };
   }
 
   function pageSetup() {
@@ -171,6 +295,7 @@
     if (i < 0) return pageGuideIndex();
     const s = sections[i];
     app.innerHTML = `<div class="eyebrow">Study guide${s.num ? " · Section " + s.num : ""}</div><h1>${esc(s.title)}</h1>`;
+    app.appendChild(pinBar("guide:" + s.slug));
     const lec = s.num && lectureByNum(s.num);
     if (lec) app.appendChild(el(`<div class="callout">This page is the quick reference. For the full explanation of how it all works, read <a href="#/lecture/${lec.num}">Lecture ${lec.num}: ${esc(lec.title)}</a> (about ${readMins(lec)} min).</div>`));
     if (s.labs.length) {
@@ -202,6 +327,7 @@
     const l = lectures[i];
     const sec = numbered.find((s) => s.num === l.num);
     app.innerHTML = `<div class="eyebrow">Lecture ${l.num} · about ${readMins(l)} min read</div><h1>${esc(l.title)}</h1>`;
+    app.appendChild(pinBar("lecture:" + l.num));
     const btns = [];
     if (sec) btns.push(`<a class="btn" href="#/guide/${sec.slug}">Quick reference</a>`);
     if (sec) for (const id of sec.labs) { const lb = labById(id); btns.push(`<a class="btn" href="#/lab/${id}">Practice: Lab ${id} · ${esc(shortTitle(lb.title))} <span class="badge ${lb.runtime}">${lb.runtime === "vm" ? "VM" : "container"}</span></a>`); }
@@ -220,6 +346,7 @@
       app.appendChild(toc);
     }
     app.appendChild(body);
+    for (const h of heads) if (pinInfo("lecture:" + l.num + "#" + h.id)) h.appendChild(subPinBtn("lecture:" + l.num + "#" + h.id));
     const g = KIT.objectives.groups.find((x) => x.num === l.num);
     if (g) {
       app.appendChild(el(`<h2>Check yourself</h2>`));
@@ -300,6 +427,7 @@
         <div class="timer"><span class="best" id="best"></span><span class="clock" id="clock">0:00</span>
           <button class="btn" id="tStart">Start timer</button><button class="btn" id="tStop" title="Stop and record">Stop</button></div>
       </div>`;
+    app.querySelector(".toolbar").before(pinBar("lab:" + l.id));
     const cmds = "```bash\n./lab start " + l.id + "     # build and boot the scenario, print the tasks\n./lab shell " + l.id + "     # root shell" +
       (l.runtime === "vm" ? " (vagrant ssh + sudo -i)" : "") + "\n./lab check " + l.id + "     # grade yourself, as often as you like\n./lab reset " + l.id + "     # start over\n```";
     const cmdBox = md(cmds); cmdBox.classList.add("lab-cmds"); app.appendChild(cmdBox);
@@ -952,6 +1080,7 @@
     else if (page === "setup") pageSetup();
     else if (page === "host") pageHost();
     else if (page === "notes") pageNotes();
+    else if (page === "review") pageReview();
     else { pageHome(); navKey = "#/"; }
     renderSidebar(navKey);
     const t = app.querySelector("h1");
