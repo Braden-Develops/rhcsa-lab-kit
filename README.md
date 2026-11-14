@@ -1,6 +1,7 @@
 # RHCSA (EX200, RHEL 10) Lab Kit
 
-A study guide plus 11 hands-on labs covering every objective of the current RHCSA exam. Each lab has a
+A study guide plus 11 hands-on labs covering every objective of the current RHCSA exam, and a separate
+hardware diagnostics module with 8 lectures and 7 break-fix labs. Each lab has a
 working part to build, **broken scenarios to diagnose and fix**, an automatic **grader**, and a worked **solution**.
 
 - `OBJECTIVES.md`: the 62 official objective lines (verbatim, from Red Hat's EX200 page) mapped to guide rows and lab tasks
@@ -30,6 +31,25 @@ working part to build, **broken scenarios to diagnose and fix**, an automatic **
 
 The exam's golden rule is *"configurations must persist after reboot"*, which is another reason the VM matters:
 the VM grader for storage/boot checks that you actually rebooted.
+
+## Hardware diagnostics module (labs 12-18)
+
+A separate module for finding bad server hardware with Linux: eight lectures in `hardware/lectures/` (method,
+memory, storage, CPU, PCIe, thermal/power/BMC, JBODs and SAS, ARM servers) and seven **break-fix labs**, where the
+lab breaks the machine (or hands you evidence from a broken one) and you diagnose it, fix it, and write the check
+that would have caught it. It lines up with the hardware side of RH342/RH442 rather than the RHCSA.
+[`hardware/README.md`](hardware/README.md) explains what each lab simulates and how (a VM has no DIMMs or fans to
+break), and the website shows the module separately from the RHCSA material.
+
+| Lab | Runs in | Scenario |
+|---|---|---|
+| 12 Memory errors | VM | CE storm on one DIMM: EDAC log + rasdaemon, map to the silkscreen slot, RMA decision, write a CE-delta stress wrapper |
+| 13 Failing disk | VM | md mirror member killed by real I/O errors (dm error target); replace it; SMART triage (cable vs. media); fio verify |
+| 14 Slow node | VM | CPUs offline via kernel arg, cgroup quota, a self-restarting CPU hog, power profile; decode an MCE |
+| 15 PCIe | VM | AER errors against a real device; LnkCap vs. LnkSta; write a link-degradation check |
+| 16 Thermal/power/BMC | container | bring a Redfish BMC simulator back up; failed fan, lost PSU, hot zone; ipmitool capture; write a Redfish health check |
+| 17 JBOD fan-out | VM | 8 slots on device-mapper, one slow (dm-delay), one returning EIO; fan-out fio; peer-outlier detector; SAS PHY counter deltas |
+| 18 ARM portability | container | fix an x86-only CPU check for aarch64: implementer/part, not-applicable vs. pass, GHES vs. MCE |
 
 ## Requirements
 

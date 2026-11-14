@@ -21,11 +21,18 @@
   const numbered = sections.filter((s) => s.num);
   const lectures = KIT.lectures || [];
   const lectureByNum = (n) => lectures.find((l) => l.num === n);
+  // Two modules share this site: the RHCSA refresher and the separate hardware diagnostics module.
+  const isHw = (x) => x && x.track === "hw";
+  const rhLectures = lectures.filter((l) => !isHw(l)), hwLectures = lectures.filter(isHw);
+  const rhLabs = KIT.labs.filter((l) => !isHw(l)), hwLabs = KIT.labs.filter(isHw);
+  const lecName = (l) => (isHw(l) ? "Lecture H" + l.num.slice(1) : "Lecture " + l.num);
+  const sameTrack = (list, x) => list.filter((y) => isHw(y) === isHw(x));
+  let module = "rhcsa";
   const readMins = (l) => Math.max(1, Math.round(l.words / 200));
   const slugId = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const allObjectives = KIT.objectives.groups.flatMap((g) => g.items);
   const objDone = (items) => items.filter((o) => state.obj[o.id]).length;
-  const labsDone = () => KIT.labs.filter((l) => state.labs[l.id] === "done").length;
+  const labsDone = (list = rhLabs) => list.filter((l) => state.labs[l.id] === "done").length;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const fmtTime = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
     return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
@@ -84,31 +91,47 @@
   function renderSidebar(route) {
     const active = (h) => (route === h ? " active" : "");
     const done = objDone(allObjectives);
-    let h = `<div class="nav-group">
-      <a class="nav-link${active("#/")}" href="#/">Overview</a>
-      <a class="nav-link${active("#/setup")}" href="#/setup">Set up the labs</a>
-      <a class="nav-link${active("#/objectives")}" href="#/objectives"><span class="nav-text">Objectives checklist</span><span class="nav-num">${done}/${allObjectives.length}</span></a>
-      <div class="mini-bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div>
+    const hw = module === "hw";
+    let h = `<div class="module-switch"><a class="${hw ? "" : "on"}" href="#/">RHCSA refresher</a><a class="${hw ? "on" : ""}" href="#/hw">Hardware diagnostics</a></div>`;
+    const lecGroup = (title, list) => {
+      if (!list.length) return "";
+      let g = `<div class="nav-group"><div class="nav-label"><span>${title}</span><span>${list.filter((l) => state.read[l.num]).length}/${list.length}</span></div>`;
+      for (const l of list) g += `<a class="nav-link${active("#/lecture/" + l.num)}" href="#/lecture/${l.num}"><span class="nav-num">${esc(l.label || l.num)}</span><span class="nav-text">${esc(l.title)}</span>${state.read[l.num] ? '<span class="dot done"></span>' : ""}</a>`;
+      return g + `</div>`;
+    };
+    const labGroup = (title, list) => {
+      let g = `<div class="nav-group"><div class="nav-label"><span>${title}</span><span>${labsDone(list)}/${list.length}</span></div>`;
+      for (const l of list) {
+        const st = state.labs[l.id] || "todo";
+        g += `<a class="nav-link${active("#/lab/" + l.id)}" href="#/lab/${l.id}"><span class="nav-num">${l.id}</span><span class="nav-text">${esc(shortTitle(l.title))}</span><span class="dot ${st}"></span></a>`;
+      }
+      return g + `</div>`;
+    };
+    const shared = `
       <a class="nav-link${active("#/host")}" href="#/host"><span class="nav-text">Lab host</span><span class="dot ${hostDotClass()}" id="hostDot" title="${esc(hostDotTitle())}"></span></a>
       <a class="nav-link${active("#/notes")}" href="#/notes"><span class="nav-text">My notes</span><span class="nav-num">${Object.values(state.notes).filter((n) => n.text.trim()).length || ""}</span></a>
-      <a class="nav-link${active("#/review")}" href="#/review"><span class="nav-text">Pinned &amp; tests</span><span class="nav-num">${Object.keys(state.pins).filter((k) => pinInfo(k)).length || ""}</span></a>
-    </div>
-    `;
-    if (lectures.length) {
-      h += `<div class="nav-group"><div class="nav-label"><span>Lectures</span><span>${lectures.filter((l) => state.read[l.num]).length}/${lectures.length}</span></div>`;
-      for (const l of lectures) h += `<a class="nav-link${active("#/lecture/" + l.num)}" href="#/lecture/${l.num}"><span class="nav-num">${l.num}</span><span class="nav-text">${esc(l.title)}</span>${state.read[l.num] ? '<span class="dot done"></span>' : ""}</a>`;
-      h += `</div>`;
+      <a class="nav-link${active("#/review")}" href="#/review"><span class="nav-text">Pinned &amp; tests</span><span class="nav-num">${Object.keys(state.pins).filter((k) => pinInfo(k)).length || ""}</span></a>`;
+    if (hw) {
+      h += `<div class="nav-group">
+        <a class="nav-link${active("#/hw")}" href="#/hw">Module overview</a>
+        <a class="nav-link${active("#/setup")}" href="#/setup">Set up the labs</a>${shared}
+      </div>`;
+      h += lecGroup("Hardware lectures", hwLectures);
+      h += labGroup("Break-fix labs", hwLabs);
+    } else {
+      h += `<div class="nav-group">
+        <a class="nav-link${active("#/")}" href="#/">Overview</a>
+        <a class="nav-link${active("#/setup")}" href="#/setup">Set up the labs</a>
+        <a class="nav-link${active("#/objectives")}" href="#/objectives"><span class="nav-text">Objectives checklist</span><span class="nav-num">${done}/${allObjectives.length}</span></a>
+        <div class="mini-bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div>${shared}
+      </div>`;
+      h += lecGroup("Lectures", rhLectures);
+      h += `<div class="nav-group"><div class="nav-label">Study guide (quick reference)</div>`;
+      for (const s of sections) {
+        h += `<a class="nav-link${active("#/guide/" + s.slug)}" href="#/guide/${s.slug}"><span class="nav-num">${s.num ? s.num : "•"}</span><span class="nav-text">${esc(s.title)}</span></a>`;
+      }
+      h += `</div>` + labGroup("Labs", rhLabs);
     }
-    h += `<div class="nav-group"><div class="nav-label">Study guide (quick reference)</div>`;
-    for (const s of sections) {
-      h += `<a class="nav-link${active("#/guide/" + s.slug)}" href="#/guide/${s.slug}"><span class="nav-num">${s.num ? s.num : "•"}</span><span class="nav-text">${esc(s.title)}</span></a>`;
-    }
-    h += `</div><div class="nav-group"><div class="nav-label"><span>Labs</span><span>${labsDone()}/${KIT.labs.length}</span></div>`;
-    for (const l of KIT.labs) {
-      const st = state.labs[l.id] || "todo";
-      h += `<a class="nav-link${active("#/lab/" + l.id)}" href="#/lab/${l.id}"><span class="nav-num">${l.id}</span><span class="nav-text">${esc(shortTitle(l.title))}</span><span class="dot ${st}"></span></a>`;
-    }
-    h += `</div>`;
     sidebar.innerHTML = h;
   }
   function shortTitle(t) { return t.split(/[:(]/)[0].trim(); }
@@ -129,7 +152,7 @@
       const g = objGroup(l.num), sec = numbered.find((s) => s.num === l.num);
       let subTitle = "";
       if (sub) { const m = l.body.split("\n").find((line) => /^## /.test(line) && "lec-" + slugId(line.slice(3).replace(/[*`_]/g, "")) === sub); if (!m) return null; subTitle = m.slice(3).replace(/[*`]/g, ""); }
-      return { kind: sub ? "Lecture subsection" : "Lecture", title: "Lecture " + l.num + ": " + l.title + (subTitle ? " › " + subTitle : ""), href: "#/lecture/" + l.num, objs: sub ? allObjectives.filter((o) => subTitle.startsWith(o.id + " ")) : g ? g.items : [], labs: sec ? sec.labs : [], sub: subTitle };
+      return { kind: sub ? "Lecture subsection" : "Lecture", title: lecName(l) + ": " + l.title + (subTitle ? " › " + subTitle : ""), href: "#/lecture/" + l.num, objs: sub ? allObjectives.filter((o) => subTitle.startsWith(o.id + " ")) : g ? g.items : [], labs: sec ? sec.labs : [], sub: subTitle };
     }
     if (kind === "lab") {
       const l = labById(rest); if (!l) return null;
@@ -256,15 +279,16 @@
     app.innerHTML = `
       <div class="eyebrow">EX200 · RHEL 10</div>
       <h1>${esc(KIT.guide.title)}</h1>
-      <p class="lede">The 62 official objectives, long-form lectures that explain how each part of the system works, a quick-reference study guide with the commands and traps, and 11 hands-on labs with broken scenarios,
+      <p class="lede">The 62 official objectives, long-form lectures that explain how each part of the system works, a quick-reference study guide with the commands and traps, and ${rhLabs.length} hands-on labs with broken scenarios,
       an automatic grader and worked solutions. Your progress is saved in this browser.</p>
       <div class="grid cols-3">
         <a class="card" href="#/objectives" style="color:inherit;text-decoration:none"><div class="stat-num">${done}<span class="stat-label"> / ${allObjectives.length}</span></div><div class="stat-label">objectives checked off</div><div class="bar"><i style="width:${pct(done, allObjectives.length)}%"></i></div></a>
-        <a class="card" href="#/labs" style="color:inherit;text-decoration:none"><div class="stat-num">${ld}<span class="stat-label"> / ${KIT.labs.length}</span></div><div class="stat-label">labs passing</div><div class="bar"><i style="width:${pct(ld, KIT.labs.length)}%"></i></div></a>
+        <a class="card" href="#/labs" style="color:inherit;text-decoration:none"><div class="stat-num">${ld}<span class="stat-label"> / ${rhLabs.length}</span></div><div class="stat-label">labs passing</div><div class="bar"><i style="width:${pct(ld, KIT.labs.length)}%"></i></div></a>
         <a class="card" href="#/guide/${finalSec ? finalSec.slug : ""}" style="color:inherit;text-decoration:none"><div class="stat-num">${finalDone}<span class="stat-label"> / ${finalItems}</span></div><div class="stat-label">final-week drills done</div><div class="bar"><i style="width:${pct(finalDone, finalItems)}%"></i></div></a>
       </div>
       <div class="btn-row">
-        <a class="btn primary" href="${lectures.length ? "#/lecture/" + lectures[0].num : "#/guide/" + sections[0].slug}">Start reading</a>
+        <a class="btn primary" href="${rhLectures.length ? "#/lecture/" + rhLectures[0].num : "#/guide/" + sections[0].slug}">Start reading</a>
+        ${hwLectures.length || hwLabs.length ? `<a class="btn" href="#/hw">Hardware diagnostics module →</a>` : ""}
         <a class="btn" href="#/setup">Set up the labs</a>
         <a class="btn" href="${REPO_URL}/archive/refs/heads/main.zip">Download the kit (.zip)</a>
       </div>
@@ -320,16 +344,16 @@
     app.innerHTML = `<div class="eyebrow">Lectures</div><h1>Lectures</h1>
       <p class="lede">Long-form reading, one lecture per exam section, organised by the official objective numbers. Each one explains what is going on underneath the commands, so you can reason your way through a task you have never seen. Read a lecture, skim the quick reference, then do the lab.</p>`;
     const list = el(`<div class="section-list"></div>`);
-    for (const l of lectures) list.appendChild(el(`<a class="card section-row" href="#/lecture/${l.num}" style="color:inherit;text-decoration:none"><div class="n">${l.num}</div><div><div class="t">${esc(l.title)}</div><div class="s">about ${readMins(l)} min · ${l.words.toLocaleString()} words</div></div><div>${state.read[l.num] ? '<span class="badge done">✓ read</span>' : ""}</div></a>`));
+    for (const l of rhLectures) list.appendChild(el(`<a class="card section-row" href="#/lecture/${l.num}" style="color:inherit;text-decoration:none"><div class="n">${l.num}</div><div><div class="t">${esc(l.title)}</div><div class="s">about ${readMins(l)} min · ${l.words.toLocaleString()} words</div></div><div>${state.read[l.num] ? '<span class="badge done">✓ read</span>' : ""}</div></a>`));
     app.appendChild(list);
   }
 
   function pageLecture(num) {
-    const i = lectures.findIndex((l) => l.num === num);
-    if (i < 0) return pageLectureIndex();
-    const l = lectures[i];
+    const l0 = lectureByNum(num);
+    if (!l0) return pageLectureIndex();
+    const track = sameTrack(lectures, l0), i = track.indexOf(l0), l = l0;
     const sec = numbered.find((s) => s.num === l.num);
-    app.innerHTML = `<div class="eyebrow">Lecture ${l.num} · about ${readMins(l)} min read</div><h1>${esc(l.title)}</h1>`;
+    app.innerHTML = `<div class="eyebrow">${isHw(l) ? "Hardware diagnostics · " : ""}${lecName(l)} · about ${readMins(l)} min read</div><h1>${esc(l.title)}</h1>`;
     app.appendChild(pinBar("lecture:" + l.num));
     const btns = [];
     if (sec) btns.push(`<a class="btn" href="#/guide/${sec.slug}">Quick reference</a>`);
@@ -359,8 +383,8 @@
     const mark = el(`<div class="btn-row"><button class="btn${state.read[l.num] ? "" : " primary"}" id="markRead">${state.read[l.num] ? "✓ Read (click to undo)" : "Mark lecture as read"}</button></div>`);
     mark.querySelector("button").onclick = () => { if (state.read[l.num]) delete state.read[l.num]; else state.read[l.num] = true; save(); pageLecture(num); renderSidebar(curKey); };
     app.appendChild(mark);
-    attachNotes("lecture-" + l.num, "Lecture " + l.num + ": " + l.title);
-    app.appendChild(pager(i > 0 && lectures[i - 1], lectures[i + 1], (x) => "#/lecture/" + x.num, (x) => "Lecture " + x.num + " · " + x.title));
+    attachNotes("lecture-" + l.num, lecName(l) + ": " + l.title);
+    app.appendChild(pager(i > 0 && track[i - 1], track[i + 1], (x) => "#/lecture/" + x.num, (x) => lecName(x) + " · " + x.title));
   }
 
   function objList(g) {
@@ -401,24 +425,48 @@
     document.getElementById("objClear").onclick = (e) => { e.preventDefault(); if (confirm("Uncheck all 62 objectives?")) { state.obj = {}; save(); route(); } };
   }
 
-  function pageLabs() {
-    app.innerHTML = `<div class="eyebrow">Hands-on</div><h1>Labs</h1>
-      <p class="lede">Each lab builds a scenario with working parts to configure and broken parts to fix, then grades you. Container labs run under Podman or Docker; VM labs need Vagrant because they touch the kernel, the bootloader or real disks.</p>`;
+  function labCards(list) {
     const grid = el(`<div class="lab-cards"></div>`);
-    for (const l of KIT.labs) {
+    for (const l of list) {
       const st = state.labs[l.id];
       grid.appendChild(el(`<a class="card lab-card" href="#/lab/${l.id}"><div class="top"><span class="id">${l.id}</span>
         <span>${st === "done" ? '<span class="badge done">✓ passing</span> ' : ""}<span class="badge ${l.runtime}">${l.runtime === "vm" ? "VM" : "container"}</span></span></div>
         <div class="title">${esc(l.title)}</div>${state.best[l.id] ? `<div class="stat-label">Best time ${fmtTime(state.best[l.id])}</div>` : ""}</a>`));
     }
-    app.appendChild(grid);
+    return grid;
+  }
+  function pageLabs() {
+    app.innerHTML = `<div class="eyebrow">Hands-on</div><h1>Labs</h1>
+      <p class="lede">Each lab builds a scenario with working parts to configure and broken parts to fix, then grades you. Container labs run under Podman or Docker; VM labs need Vagrant because they touch the kernel, the bootloader or real disks.</p>`;
+    app.appendChild(el(`<h2>RHCSA refresher</h2>`));
+    app.appendChild(labCards(rhLabs));
+    if (hwLabs.length) { app.appendChild(el(`<h2>Hardware diagnostics: break-fix</h2>`)); app.appendChild(labCards(hwLabs)); }
+  }
+
+  /* ---------- hardware diagnostics module: its own landing page ---------- */
+  function pageHw() {
+    const read = hwLectures.filter((l) => state.read[l.num]).length, ld = labsDone(hwLabs);
+    app.innerHTML = `<div class="eyebrow">Module</div><h1>Hardware diagnostics</h1>
+      <div class="grid cols-3">
+        <div class="card"><div class="stat-num">${read}<span class="stat-label"> / ${hwLectures.length}</span></div><div class="stat-label">lectures read</div><div class="bar"><i style="width:${pct(read, hwLectures.length)}%"></i></div></div>
+        <div class="card"><div class="stat-num">${ld}<span class="stat-label"> / ${hwLabs.length}</span></div><div class="stat-label">break-fix labs passing</div><div class="bar"><i style="width:${pct(ld, hwLabs.length)}%"></i></div></div>
+        <div class="card"><div class="stat-num">${hwLectures.reduce((a, l) => a + readMins(l), 0)}<span class="stat-label"> min</span></div><div class="stat-label">of reading in total</div></div>
+      </div>`;
+    if (hwLectures.length) app.appendChild(el(`<div class="btn-row"><a class="btn primary" href="#/lecture/${(hwLectures.find((l) => !state.read[l.num]) || hwLectures[0]).num}">${read ? "Continue reading" : "Start reading"}</a><a class="btn" href="#/setup">Set up the labs</a></div>`));
+    app.appendChild(md(KIT.hardware || ""));
+    app.appendChild(el(`<h2>Lectures</h2>`));
+    const list = el(`<div class="section-list"></div>`);
+    for (const l of hwLectures) list.appendChild(el(`<a class="card section-row" href="#/lecture/${l.num}" style="color:inherit;text-decoration:none"><div class="n">${esc(l.label)}</div><div><div class="t">${esc(l.title)}</div><div class="s">about ${readMins(l)} min · ${l.words.toLocaleString()} words</div></div><div>${state.read[l.num] ? '<span class="badge done">✓ read</span>' : ""}</div></a>`));
+    app.appendChild(list);
+    app.appendChild(el(`<h2>Break-fix labs</h2>`));
+    app.appendChild(labCards(hwLabs));
   }
 
   let timer = null;
   function pageLab(id) {
-    const i = KIT.labs.findIndex((l) => l.id === id);
-    if (i < 0) return pageLabs();
-    const l = KIT.labs[i];
+    const l = labById(id);
+    if (!l) return pageLabs();
+    const track = sameTrack(KIT.labs, l), i = track.indexOf(l);
     const hasVars = /\{\{\w+\}\}/.test(l.tasks);
     const tasks = l.tasks.replace(/^# .*\n/, "").replace(/\*\*(\w+) = \{\{\1\}\}\*\*/g, "<var>$1</var>").replace(/\{\{(\w+)\}\}/g, "<var>$1</var>");
     const heading = (l.tasks.match(/^# (.*)/) || [, l.title])[1];
@@ -453,7 +501,7 @@
     }
     const sec = numbered.filter((s) => s.labs.includes(l.id));
     if (sec.length) app.appendChild(el(`<p>Read first: ${sec.map((s) => `<a href="#/guide/${s.slug}">Section ${s.num}, ${esc(s.title)}</a>`).join(" · ")}</p>`));
-    app.appendChild(pager(i > 0 && KIT.labs[i - 1], KIT.labs[i + 1], (x) => "#/lab/" + x.id, (x) => "Lab " + x.id + " · " + shortTitle(x.title)));
+    app.appendChild(pager(i > 0 && track[i - 1], track[i + 1], (x) => "#/lab/" + x.id, (x) => "Lab " + x.id + " · " + shortTitle(x.title)));
 
     buildConsole(l);
     // status
@@ -860,7 +908,7 @@
 
   const noteSource = (k) => {
     let m;
-    if ((m = k.match(/^lecture-(\d+)$/)) && lectureByNum(m[1])) return { title: "Lecture " + m[1] + ": " + lectureByNum(m[1]).title, href: "#/lecture/" + m[1], order: "1" + m[1].padStart(2, "0") };
+    if ((m = k.match(/^lecture-(h?\d+)$/)) && lectureByNum(m[1])) { const l = lectureByNum(m[1]); return { title: lecName(l) + ": " + l.title, href: "#/lecture/" + m[1], order: (isHw(l) ? "4" : "1") + m[1].replace("h", "").padStart(2, "0") }; }
     if ((m = k.match(/^lab-(\d\d)$/)) && labById(m[1])) return { title: "Lab " + m[1] + ": " + shortTitle(labById(m[1]).title), href: "#/lab/" + m[1], order: "3" + m[1] };
     if ((m = k.match(/^guide-(.+)$/))) { const s = sections.find((x) => ("guide-" + x.slug).slice(0, 64).replace(/-+$/, "") === k); if (s) return { title: "Study guide: " + s.title, href: "#/guide/" + s.slug, order: "2" + String(sections.indexOf(s)).padStart(2, "0") }; }
     return { title: k, href: null, order: "9" + k };
@@ -1012,7 +1060,7 @@
   const index = [];
   (function buildIndex() {
     const add = (where, title, href, text) => text.split(/\n/).forEach((line) => { if (line.trim()) index.push({ where, title, href, line }); });
-    for (const l of lectures) add("Lecture " + l.num, l.title, "#/lecture/" + l.num, l.body);
+    for (const l of lectures) add(lecName(l), l.title, "#/lecture/" + l.num, l.body);
     for (const s of sections) add("Study guide", s.title, "#/guide/" + s.slug, s.body);
     for (const o of allObjectives) index.push({ where: "Objective " + o.id, title: o.text, href: "#/objectives", line: o.text + " (lab " + o.labs + ")" });
     for (const l of KIT.labs) { add("Lab " + l.id + " tasks", l.title, "#/lab/" + l.id, l.tasks); add("Lab " + l.id + " solution", l.title, "#/lab/" + l.id, l.solution); }
@@ -1122,6 +1170,10 @@
     document.body.classList.remove("nav-open");
     let navKey = h;
     curKey = h;
+    if (page === "hw") module = "hw";
+    else if (page === "lecture" && arg) module = isHw(lectureByNum(arg)) ? "hw" : "rhcsa";
+    else if (page === "lab" && arg) module = isHw(labById(arg)) ? "hw" : "rhcsa";
+    else if (["", "guide", "objectives", "lectures"].includes(page || "") || (page === "lecture" && !arg)) module = "rhcsa";
     if (page === "search") { const q = decodeURIComponent(arg); if (searchBox.value.trim() !== q) searchBox.value = q; pageSearch(q); }
     else if (page === "lecture" && arg) pageLecture(arg);
     else if (page === "lecture" || page === "lectures") pageLectureIndex();
@@ -1134,10 +1186,11 @@
     else if (page === "host") pageHost();
     else if (page === "notes") pageNotes();
     else if (page === "review") pageReview();
+    else if (page === "hw") pageHw();
     else { pageHome(); navKey = curKey = "#/"; }
     renderSidebar(navKey);
     const t = app.querySelector("h1");
-    document.title = (t && navKey !== "#/" ? t.textContent + " · " : "") + "RHCSA Study Kit";
+    document.title = (t && navKey !== "#/" ? t.textContent + " · " : "") + (module === "hw" ? "Hardware Diagnostics" : "RHCSA Study Kit");
     const a = sidebar.querySelector(".active"); if (a) a.scrollIntoView({ block: "nearest" });
     buildRail(["lecture", "guide"].includes(page) && arg ? page : null, currentNoteKey);
     landing = null;
