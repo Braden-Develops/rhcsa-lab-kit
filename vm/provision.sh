@@ -7,6 +7,9 @@ dnf -y --setopt=strict=0 install lvm2 parted gdisk dosfstools xfsprogs e2fsprogs
   policycoreutils-python-utils setroubleshoot-server selinux-policy-doc tuned chrony cronie at \
   acl man-pages man-db bash-completion vim-enhanced tar bzip2 rsync python3 grubby \
   NetworkManager diffutils curl flatpak
+# Hardware diagnostics module (labs 12-18); the labs also install these themselves if missing
+dnf -y --setopt=strict=0 install rasdaemon perl-DBD-SQLite sqlite dmidecode stress-ng sysstat kernel-tools mdadm \
+  smartmontools nvme-cli fio jq sg3_utils lsscsi pciutils sos
 dnf -y remove autofs 2>/dev/null || true     # you install it yourself in lab 07
 echo 'root:redhat' | chpasswd
 id student &>/dev/null || useradd -m -c "Lab student" student
